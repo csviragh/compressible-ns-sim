@@ -51,6 +51,9 @@ export class Solver {
   params: Params;
   t = 0;
   u: Float64Array; v: Float64Array; dye: Float64Array;
+  /** Passive density ρ (continuity equation, no feedback on u). */
+  rho: Float64Array; floorHits = 0;
+  private r1: Float64Array; private dr: Float64Array;
   fx: Float64Array; fy: Float64Array;
   private fft: FFT2;
   private ur: Float64Array; private ui: Float64Array; private vr: Float64Array; private vi: Float64Array;
@@ -60,14 +63,14 @@ export class Solver {
   constructor(n = 256, params: Params = defaultParams()) {
     this.n = n; this.h = 1 / n; this.params = params;
     const N = n * n, A = () => new Float64Array(N);
-    this.u = A(); this.v = A(); this.dye = A(); this.fx = A(); this.fy = A();
+    this.u = A(); this.v = A(); this.dye = A(); this.rho = A().fill(1); this.r1 = A(); this.dr = A(); this.fx = A(); this.fy = A();
     this.ur = A(); this.ui = A(); this.vr = A(); this.vi = A(); this.tmp = A(); this.tmp2 = A();
     this.fft = new FFT2(n);
     this.kap = new Float64Array(n);
     for (let i = 0; i < n; i++) { const m = i <= n / 2 ? i : i - n; this.kap[i] = (2 / this.h) * Math.sin(Math.PI * m / n); }
   }
 
-  reset() { this.u.fill(0); this.v.fill(0); this.dye.fill(0); this.fx.fill(0); this.fy.fill(0); this.t = 0; }
+  reset() { this.u.fill(0); this.v.fill(0); this.dye.fill(0); this.fx.fill(0); this.fy.fill(0); this.rho.fill(1); this.floorHits = 0; this.t = 0; }
 
   /** Exact Lamé viscous step: transverse part × e^{−μκ²Δt}, longitudinal × e^{−(λ+2μ)κ²Δt}. */
   viscous(dt: number) {
@@ -90,6 +93,38 @@ export class Solver {
     this.fft.fft2(ur, ui, true); this.fft.fft2(vr, vi, true);
     this.u.set(ur); this.v.set(vr);
   }
+
+  /** dρ/dt = −∇·(ρu): MUSCL (MC limiter) upwind fluxes, face velocity = mean of the two cells. */
+  private densityRhs(R: Float64Array, out: Float64Array) {
+    const { n, u, v } = this, ih = 1 / this.h;
+    out.fill(0);
+    const mc = (a: number, b: number) => { if (a * b <= 0) return 0; const m = Math.min(2 * Math.abs(a), 2 * Math.abs(b), 0.5 * Math.abs(a + b)); return a > 0 ? m : -m; };
+    for (let dir = 0; dir < 2; dir++) for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      let ka: number, kb: number, kc: number, ke: number;
+      if (dir === 0) { const r = j * n; ka = r + (i - 1 + n) % n; kb = r + i; kc = r + (i + 1) % n; ke = r + (i + 2) % n; }
+      else { ka = ((j - 1 + n) % n) * n + i; kb = j * n + i; kc = ((j + 1) % n) * n + i; ke = ((j + 2) % n) * n + i; }
+      const w = dir === 0 ? u : v, uf = 0.5 * (w[kb] + w[kc]);
+      const rf = uf >= 0 ? R[kb] + 0.5 * mc(R[kb] - R[ka], R[kc] - R[kb]) : R[kc] - 0.5 * mc(R[kc] - R[kb], R[ke] - R[kc]);
+      const F = uf * rf * ih;
+      out[kb] -= F; out[kc] += F;
+    }
+  }
+
+  /** Continuity step with SSP-RK2 sub-steps (per-direction CFL ≤ 0.25); mass is conserved to round-off. */
+  advectDensity(dt: number) {
+    let umax = 1e-12;
+    for (let k = 0; k < this.u.length; k++) umax = Math.max(umax, Math.abs(this.u[k]), Math.abs(this.v[k]));
+    const ns = Math.max(1, Math.ceil(umax * dt / this.h / 0.25)), d = dt / ns, { rho, r1, dr } = this, N = rho.length;
+    for (let s = 0; s < ns; s++) {
+      this.densityRhs(rho, dr);
+      for (let k = 0; k < N; k++) r1[k] = rho[k] + d * dr[k];
+      this.densityRhs(r1, dr);
+      for (let k = 0; k < N; k++) rho[k] = 0.5 * (rho[k] + r1[k] + d * dr[k]);
+      // positivity safeguard (should not fire at this CFL; breaks exact conservation if it does)
+      for (let k = 0; k < N; k++) if (!(rho[k] >= 0)) { rho[k] = 0; this.floorHits++; }
+    }
+  }
+  totalMass() { let m = 0; for (const r of this.rho) m += r; return m * this.h * this.h; }
 
   /** Bilinear periodic sample of q at grid coordinates (x, y) in cells. */
   private sample(q: Float64Array, x: number, y: number) {
@@ -129,6 +164,7 @@ export class Solver {
     const N = this.u.length;
     for (let k = 0; k < N; k++) { this.u[k] += dt * this.fx[k]; this.v[k] += dt * this.fy[k]; }
     this.viscous(dt);
+    this.advectDensity(dt);
     this.advect(dt);
     if (this.params.selfProp) this.selfPropulsion(dt);
     if (this.params.dyeFade > 0) { const f = Math.exp(-this.params.dyeFade * dt); for (let k = 0; k < N; k++) this.dye[k] *= f; }
@@ -203,13 +239,14 @@ export class Solver {
   }
   rmsDivergence() { const f = new Float64Array(this.u.length); this.field('divergence', f); let s = 0; for (const x of f) s += x * x; return Math.sqrt(s / f.length); }
 
-  field(kind: 'speed' | 'vorticity' | 'divergence' | 'direction' | 'dye', out: Float64Array) {
+  field(kind: 'density' | 'speed' | 'vorticity' | 'divergence' | 'direction' | 'dye', out: Float64Array) {
     const { n, h, u, v } = this;
     for (let j = 0; j < n; j++) {
       const jm = ((j - 1 + n) % n) * n, jp = ((j + 1) % n) * n, jj = j * n;
       for (let i = 0; i < n; i++) {
         const k = jj + i, im = jj + (i - 1 + n) % n, ip = jj + (i + 1) % n;
         switch (kind) {
+          case 'density': out[k] = this.rho[k]; break;
           case 'speed': out[k] = Math.hypot(u[k], v[k]); break;
           case 'vorticity': out[k] = ((v[ip] - v[im]) - (u[jp + i] - u[jm + i])) / (2 * h); break;
           case 'divergence': out[k] = ((u[ip] - u[im]) + (v[jp + i] - v[jm + i])) / (2 * h); break;

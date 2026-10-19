@@ -32,6 +32,7 @@
       <section>
         <label class="row">View
           <select id="view">
+            <option value="density">Density ρ (passive)</option>
             <option value="direction">Velocity direction (hue)</option>
             <option value="speed">Speed |u|</option>
             <option value="vorticity">Vorticity ω</option>
@@ -39,6 +40,7 @@
             <option value="dye">Dye</option>
           </select>
         </label>
+        <label class="row" title="Half-width of the colour range around ρ = 1; 0 = auto">ρ range ±<input id="rho-range" type="number" value="0" min="0" step="0.05" style="width:5em"></label>
         <label class="check"><input type="checkbox" id="arrows" checked /> Velocity arrows (A)</label>
         <label class="slider">Arrow spacing (cells) <output id="aspace-out"></output>
           <input type="range" id="aspace" min="4" max="32" step="1" />
@@ -84,7 +86,7 @@
         <p>Like the Stable Fluids solver of navier-stokes-sim, but with no pressure and no
           projection, so the velocity is free to compress. Shear (transverse) modes damp at μk²,
           compressive (longitudinal) modes at (λ+2μ)k²; stability needs μ ≥ 0 and λ + 2μ ≥ 0
-          (λ is clamped). The viscous step is exact in Fourier space; advection is semi-Lagrangian.</p>
+          (λ is clamped). A passive density obeys ∂ρ/∂t + ∇·(ρ<b>u</b>) = 0 (finite volume, mass conserved) with no feedback on <b>u</b>. The viscous step is exact in Fourier space; advection is semi-Lagrangian.</p>
         <p>Shortcuts: <kbd>Space</kbd> pause, <kbd>S</kbd> step, <kbd>R</kbd> reset, <kbd>V</kbd> next view, <kbd>A</kbd> arrows, <kbd>H</kbd> hide panel.</p>
       </details>
     </aside>

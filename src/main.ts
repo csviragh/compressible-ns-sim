@@ -2,7 +2,7 @@ import './style.css';
 import { Solver, defaultParams, clampParams, bulkViscosity, longitudinalViscosity } from './solver/solver';
 import { viridis, diverging, hsv, type LUT } from './render/colormaps';
 
-type View = 'direction' | 'speed' | 'vorticity' | 'divergence' | 'dye';
+type View = 'density' | 'direction' | 'speed' | 'vorticity' | 'divergence' | 'dye';
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const params = defaultParams();
@@ -105,7 +105,12 @@ function render() {
     }
   } else {
     let lut: LUT = viridis, lo = 0, hi = 1;
-    if (view === 'vorticity' || view === 'divergence') {
+    if (view === 'density') {
+      const fixed = parseFloat($<HTMLInputElement>('rho-range').value);
+      let a = 1e-6; for (const r of buf) a = Math.max(a, Math.abs(r - 1));
+      if (fixed > 0) a = fixed;
+      lut = diverging; lo = 1 - a; hi = 1 + a;
+    } else if (view === 'vorticity' || view === 'divergence') {
       const s = Array.from(buf, Math.abs).sort((a, b) => a - b); const a = Math.max(s[Math.floor(s.length * 0.995)], 1e-6);
       lut = diverging; lo = -a; hi = a;
     } else if (view === 'speed') { let a = 1e-6; for (const v of buf) a = Math.max(a, v); hi = a; }
@@ -117,7 +122,8 @@ function render() {
   }
   ctx.putImageData(img, 0, 0);
   drawArrows();
-  $('stats').textContent = `${n}² · t=${solver.t.toFixed(2)} s · dt=${params.dt.toFixed(4)} · Ekin=${solver.kineticEnergy().toExponential(3)} · ⟨|u|⟩=${solver.meanSpeed().toFixed(3)} · polar order=${solver.polarOrder().toFixed(3)} · rms ∇·u=${solver.rmsDivergence().toExponential(2)}`;
+  let rmin = Infinity, rmax = -Infinity; for (const r of solver.rho) { if (r < rmin) rmin = r; if (r > rmax) rmax = r; }
+  $('stats').textContent = `${n}² · t=${solver.t.toFixed(2)} s · dt=${params.dt.toFixed(4)} · Ekin=${solver.kineticEnergy().toExponential(3)} · ⟨|u|⟩=${solver.meanSpeed().toFixed(3)} · polar order=${solver.polarOrder().toFixed(3)} · rms ∇·u=${solver.rmsDivergence().toExponential(2)} · mass=${solver.totalMass().toFixed(12)} · ρ∈[${rmin.toFixed(3)}, ${rmax.toFixed(3)}]` + (solver.floorHits ? ` · ρ-floor hits ${solver.floorHits}` : '');
 }
 function drawArrows() {
   const r = over.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;

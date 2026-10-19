@@ -19,6 +19,14 @@ square (default 256 × 256, side 1, unit density):
 ∂u/∂t + (u·∇)u = μ∇²u + (λ+μ)∇(∇·u) − (1/τ)(|u| − v₀) u/|u| + f
 ```
 
+### Passive density
+
+A density field ρ (initially 1, reset by the init buttons) is carried by the continuity equation
+`∂ρ/∂t + ∇·(ρu) = 0` with **no feedback on u** (no pressure, no EOS). Finite volume in flux form:
+MUSCL reconstruction (MC limiter) with upwind face fluxes, face velocity = mean of the two cells,
+SSP-RK2 sub-steps at per-direction CFL ≤ 0.25. Total mass is conserved to round-off; a ρ ≥ 0
+floor is a last-resort safeguard, and the HUD reports it if it ever fires.
+
 ### Lamé convention
 
 The viscous term is the Navier–Lamé operator ∇·σ with
@@ -61,10 +69,10 @@ decays at (λ+2μ)k² and is carried/steepened by advection.
 * **🎲 Random initial conditions**, **➡ Ordered + perturbation** (uniform flock along +x at v₀ with a
   small disordered swirl patch, σ = 0.065, ⟨cos⟩ ≈ 0.95), with seed and amplitude fields — same
   generators as navier-stokes-sim.
-* Views: velocity direction (hue, brightness = speed), speed, vorticity, divergence, dye.
+* Views: density ρ (diverging map centred at 1, auto or fixed ± range), velocity direction (hue, brightness = speed), speed, vorticity, divergence, dye.
 * **Velocity-arrow overlay** (toggle, spacing and scale sliders).
 * Sliders: μ (log), λ, self-propulsion on/off, τ, v₀, grid (64/128/256), steps per frame.
-* HUD: grid, t, Δt, kinetic energy, ⟨|u|⟩, polar order |⟨u/|u|⟩|, rms ∇·u.
+* HUD: grid, t, Δt, kinetic energy, ⟨|u|⟩, polar order |⟨u/|u|⟩|, rms ∇·u, total mass, min/max ρ.
 * Keys: `Space` pause, `S` step, `R` reset, `V` next view, `A` arrows, `H` hide panel.
 
 ## Tests (`npm test`)
@@ -73,6 +81,7 @@ decays at (λ+2μ)k² and is carried/steepened by advection.
 * self-propulsion drives ⟨|u|⟩ → v₀; exact relaxation of a uniform flow
 * periodicity: a uniformly advected pattern wraps around the torus unchanged; viscosity conserves mean momentum
 * ∇·u ≠ 0 is retained; λ clamping
+* density: mass conserved to 1e-12 in a compressive flow with ρ ≥ 0; uniform flow translates ρ around the torus (max error < 1 %)
 
 ## Development
 

@@ -64,4 +64,27 @@ describe('compressible-velocity Lamé fluid', () => {
     const p = { ...defaultParams(), mu: 1e-3, lambda: -1 };
     expect(clampParams(p)).toBe(true); expect(p.lambda + 2 * p.mu).toBe(0);
   });
+
+  it('density: mass conserved to round-off in a compressive active flow, ρ stays ≥ 0', () => {
+    const s = new Solver(48, { ...defaultParams(), mu: 1e-4, lambda: 0 });
+    s.seedRandom(5, 0.3);
+    for (let i = 0; i < 48 * 48; i++) s.u[i] += 0.3 * Math.sin(k * ((i % 48) + 0.5) / 48); // add compression
+    const m0 = s.totalMass();
+    for (let m = 0; m < 120; m++) s.step();
+    expect(s.floorHits).toBe(0);
+    expect(Math.min(...s.rho)).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...s.rho)).toBeGreaterThan(1.05); // compression actually happened
+    expect(Math.abs(s.totalMass() - m0) / m0).toBeLessThan(1e-12);
+  });
+
+  it('density: a uniform flow translates ρ around the torus', () => {
+    const n = 64, s = mk(n, { mu: 0, lambda: 0 });
+    s.u.fill(0.5);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) s.rho[j * n + i] = 1 + 0.5 * Math.sin(k * (i + 0.5) / n);
+    const r0 = s.rho.slice();
+    while (s.t < 2 - 1e-9) s.step(1 / 64); // one full wrap at u = 0.5
+    let err = 0; for (let q = 0; q < r0.length; q++) err = Math.max(err, Math.abs(s.rho[q] - r0[q]));
+    expect(err).toBeLessThan(0.01);
+    expect(Math.abs(s.totalMass() - 1)).toBeLessThan(1e-12);
+  });
 });
