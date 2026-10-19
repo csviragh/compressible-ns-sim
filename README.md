@@ -19,16 +19,36 @@ square (default 256 × 256, side 1, unit density):
 ∂u/∂t + (u·∇)u = μ∇²u + (λ+μ)∇(∇·u) − (1/τ)(|u| − v₀) u/|u| + f
 ```
 
-with, in addition, the long-range alignment term (default Cucker–Smale) and optional delays, below.
+where the Lamé operator is **delayed** (below). There is no Cucker–Smale or other nonlocal alignment
+kernel in this model: the only coupling between neighbouring points is the (delayed) Lamé operator.
 
-### Long-range alignment and delays (ported from navier-stokes-sim)
+### Delayed Lamé operator (the model)
 
-* Kernel term `S ∫K(|x−y|)(u(y) − u(x)) dy`, ∫K = 1 (min-image on the torus): Gaussian, **Cucker–Smale** `K ∝ (1 + r²/R²)^(−β)` (default, S = 2, R = 0.05, β = 1), power law `(r² + R²)^(−α/2)`, or fractional `−ν_s(−Δ)^s u`. Undelayed it is applied exactly in Fourier space, `û ← û·exp(S(K̂ − 1)Δt)`.
-* **Delays** t_self (own velocity) and t_nb (neighbours), default 0, with a *lock t_self = t_nb* checkbox (on by default). With delays the kernel term is
-  `S[(K*u)(x, t − t_nb) − u(x, t − t_self)]` (fractional: −ν_s[(λ^s − G₀)*u(t − t_nb) + G₀u(t − t_self)], G₀ = mean symbol). Explicit; with t_self = 0 the own part is implicit.
-* Past fields are read **Eulerian** (at the fixed grid point) from a ring buffer of past velocity fields (same `FieldHistory` as navier-stokes-sim), linearly interpolated in time and read at the step midpoint.
-* The **Lamé operator is undelayed by default**. An optional checkbox applies the delays to it too: the diagonal (self) part D of the discrete operator acts on u(t − t_self), the remainder on u(t − t_nb), explicit. In navier-stokes-sim the delayed local viscosity has a grid-scale checkerboard instability, so this is marked ⚠.
-* Advection, self-propulsion and density transport are never delayed.
+The discrete Lamé operator (periodic, collocated: μ × 5-point Laplacian, (λ+μ)[∂xx u + ∂xy v, ∂xy u + ∂yy v]
+with 3-point ∂xx and 4-corner ∂xy) is split as L = D + N:
+
+* **self part** D: the cell's own stencil weight, `D = −(4μ + 2(λ+μ))/h²` (same for both components);
+* **neighbour part** N = L − D: all off-centre stencil weights.
+
+The model uses
+
+```
+L_delayed[u](x, t) = D·u(x, t − t_self) + N[u(·, t − t_nb)](x)
+```
+
+* t_self, t_nb ∈ [0, 2] s, default 0, with a **lock t_self = t_nb** checkbox (on by default).
+* Past fields are read **Eulerian**, at the fixed grid point, from a ring buffer of past velocity fields
+  (`FieldHistory`, one frame per Δt, linear interpolation in time; the current sub-step field is the newest point).
+* With t_self = t_nb = 0 it is exactly the undelayed operator L (tested).
+* Advection, self-propulsion and density transport are not delayed.
+
+**Delay-driven checkerboard instability (physics of the delayed model, not a bug).** For equal delays t
+the grid-scale checkerboard mode (k = (π/h, π/h)) obeys `â' = −Λ_cb â(t − t)` with Λ_cb = 8μ/h²
+(transverse) or (8μ + 4(λ+μ))/h² (compressive). This delay equation is unstable for **Λ_cb·t > π/2**,
+the same criterion as the delayed local viscosity in navier-stokes-sim (8νt/h² = π/2). At the default
+μ = 1e-4 on 256², Λ_cb ≈ 52 /s, so already t ≳ 0.03 s destabilises the grid scale; smaller μ or a
+coarser grid moves the threshold up (t_c ∝ h²/μ). Unequal delays give a two-delay characteristic equation
+μ = D e^{−μ t_self} + N̂(k) e^{−μ t_nb}. No hidden regularisation is added; the panel shows Λ_cb·t and warns above π/2.
 
 ### Order parameter / correlations
 
@@ -69,9 +89,11 @@ Identical to navier-stokes-sim: −(1/τ)(|u| − v₀) u/|u|, integrated exactl
 Operator splitting per step (Δt = 1/60 s):
 
 1. forces (mouse drag);
-2. **viscous step, exact in Fourier space**: transverse part × e^{−μκ²Δt}, longitudinal part ×
-   e^{−(λ+2μ)κ²Δt}, κ = 2 sin(kh/2)/h (the 5-point-Laplacian symbol). Unconditionally stable,
-   conserves the mean momentum;
+2. **delayed Lamé step, explicit forward Euler**, sub-stepped: ns = ceil(Δt·Λ/1.8) with the Gershgorin
+   bound Λ = (8μ + 5|λ+μ|)/h² of the spectrum of −L, so Δt_sub·Λ ≤ 1.8 < 2 (forward-Euler limit for the
+   undelayed operator; e.g. μ = 1e-4, λ = 0, 256²: Λ ≈ 85 /s, Δt_sub ≤ 0.024 s, 1 sub-step at Δt = 1/60).
+   Each sub-step reads its delayed fields at its own time. Conserves the mean momentum. (The exact
+   Fourier step of earlier versions cannot carry the delay and was removed.)
 3. **semi-Lagrangian advection** of u and the dye (midpoint back-trace, bilinear, periodic);
 4. exact self-propulsion relaxation.
 
@@ -86,7 +108,7 @@ decays at (λ+2μ)k² and is carried/steepened by advection.
   generators as navier-stokes-sim.
 * Views: density ρ (diverging map centred at 1, auto or fixed ± range), velocity direction (hue, brightness = speed), speed, vorticity, divergence, dye.
 * **Velocity-arrow overlay** (toggle, spacing and scale sliders).
-* Kernel selector with S, R, β, α, s; delay sliders t_self, t_nb, lock, apply-to-kernel / apply-to-Lamé ⚠; correlation panel.
+* Delay sliders t_self, t_nb (0–2 s) with lock t_self = t_nb; info line with Λ_cb·t and the sub-step count; correlation panel.
 * Sliders: μ (log), λ, self-propulsion on/off, τ, v₀, grid (64/128/256), steps per frame.
 * HUD: grid, t, Δt, kinetic energy, ⟨|u|⟩, polar order |⟨u/|u|⟩|, rms ∇·u, total mass, min/max ρ.
 * URL parameter `?view=density` (or speed, vorticity, divergence, direction, dye) picks the start view.
@@ -94,11 +116,11 @@ decays at (λ+2μ)k² and is carried/steepened by advection.
 
 ## Tests (`npm test`)
 
-* shear wave decays at μk² (±1 %), longitudinal wave at (λ+2μ)k² (±1 %) for λ = 0, 3μ, −1.5μ
+* zero delay: shear wave decays at μk² (±1 %), longitudinal wave at (λ+2μ)k² (±1 %) for λ = 0, 3μ, −1.5μ
 * self-propulsion drives ⟨|u|⟩ → v₀; exact relaxation of a uniform flow
 * periodicity: a uniformly advected pattern wraps around the torus unchanged; viscosity conserves mean momentum
 * ∇·u ≠ 0 is retained; λ clamping
-* delay buffer reproduces a known shifted history; zero delays give bit-identical undelayed dynamics; a tiny delay ≈ undelayed; S·t = 4 destabilises
+* delay buffer reproduces a known shifted history; split operator D·u + N[u] equals the undelayed L to 1e-13; zero delays = forward Euler with L, no history kept; equal-delay checkerboard decays at Λt = 0.82 and grows at Λt = 3.3
 * correlations: aligned field gives ⟨cos⟩ = 1 and C(r) = 1; ordered + perturbation start gives ⟨cos⟩ ≈ 0.95
 * density: mass conserved to 1e-12 in a compressive flow with ρ ≥ 0; uniform flow translates ρ around the torus (max error < 1 %)
 

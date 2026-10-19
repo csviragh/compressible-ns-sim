@@ -1,7 +1,6 @@
 import './style.css';
 import { Solver, defaultParams, clampParams, bulkViscosity, longitudinalViscosity } from './solver/solver';
 import { CorrelationPanel } from './ui/correlations';
-import type { KernelType } from './solver/solver';
 import { viridis, diverging, hsv, type LUT } from './render/colormaps';
 
 type View = 'density' | 'direction' | 'speed' | 'vorticity' | 'divergence' | 'dye';
@@ -52,24 +51,18 @@ function refresh() {
     (clamped ? '<br><span class="warn">λ clamped to −2μ: λ + 2μ < 0 is ill-posed (anti-diffusion)</span>' : '');
   const di = document.getElementById('d-info');
   if (di) {
-    const on = [params.delayKernel && params.kernel !== 'none' ? 'kernel' : '', params.delayLame ? 'Lamé' : ''].filter(Boolean).join(' + ') || 'nothing';
-    const St = params.kernelStrength * params.tSelf;
-    di.innerHTML = `delays act on: ${on}` + (params.kernel !== 'none' && params.kernel !== 'fractional' ? ` · S·t_self = ${St.toFixed(2)}${St > Math.PI / 2 ? ' <span class="warn">(> π/2)</span>' : ''}` : '') +
-      (solver ? ` · history ${solver.history.frames.length} frames` : '');
+    // equal-delay checkerboard criterion: Λ_cb·t > π/2 with Λ_cb = 8μ/h² (shear) or (8μ + 4(λ+μ))/h² (compressive)
+    const h = solver ? solver.h : 1 / 256, t = Math.max(params.tSelf, params.tNb);
+    const Lcb = Math.max(8 * params.mu, 8 * params.mu + 4 * (params.lambda + params.mu)) / (h * h), x = Lcb * t;
+    di.innerHTML = `delays act on the Lamé operator: self part at t − t_self, neighbour part at t − t_nb` +
+      `<br>Λ_cb·t = ${x.toFixed(2)}${x > Math.PI / 2 ? ' <span class="warn">(> π/2: grid-scale checkerboard unstable)</span>' : ''}` +
+      (solver ? ` · ${solver.lastSubsteps} sub-step(s) · history ${solver.history.frames.length} frames` : '');
   }
 }
-bindSlider('kS', () => params.kernelStrength, (v) => (params.kernelStrength = v), Math.log10, (v) => 10 ** v);
-bindSlider('kR', () => params.kernelRange, (v) => (params.kernelRange = v));
-bindSlider('kB', () => params.kernelBeta, (v) => (params.kernelBeta = v));
-bindSlider('kA', () => params.kernelAlpha, (v) => (params.kernelAlpha = v));
-bindSlider('kF', () => params.kernelS, (v) => (params.kernelS = v));
 const lock = $<HTMLInputElement>('d-lock');
-const dS = bindSlider('dS', () => params.tSelf, (v) => { params.tSelf = v; if (lock.checked) { params.tNb = v; dN.value = String(v); $('dN-out').textContent = fmt(v); } });
+const dS = bindSlider('dS', () => params.tSelf, (v) => { params.tSelf = v; if (lock.checked) { params.tNb = v; dN.value = String(v); $('dN-out').textContent = fmt(v); } refresh(); });
 const dN = bindSlider('dN', () => params.tNb, (v) => { params.tNb = v; if (lock.checked) { params.tSelf = v; dS.value = String(v); $('dS-out').textContent = fmt(v); } });
 lock.addEventListener('change', () => { if (lock.checked) { params.tNb = params.tSelf; dN.value = String(params.tSelf); $('dN-out').textContent = fmt(params.tSelf); } refresh(); });
-$<HTMLSelectElement>('kernel').addEventListener('change', (e) => { params.kernel = (e.target as HTMLSelectElement).value as KernelType; refresh(); });
-$<HTMLInputElement>('d-kernel').addEventListener('change', (e) => { params.delayKernel = (e.target as HTMLInputElement).checked; refresh(); });
-$<HTMLInputElement>('d-lame').addEventListener('change', (e) => { params.delayLame = (e.target as HTMLInputElement).checked; refresh(); });
 refresh();
 $<HTMLInputElement>('selfprop').addEventListener('change', (e) => (params.selfProp = (e.target as HTMLInputElement).checked));
 const arrowsEl = $<HTMLInputElement>('arrows');

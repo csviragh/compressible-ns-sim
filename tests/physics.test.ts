@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Solver, defaultParams, clampParams } from '../src/solver/solver';
 
 const mk = (n: number, over: Partial<ReturnType<typeof defaultParams>> = {}) =>
-  new Solver(n, { ...defaultParams(), selfProp: false, kernel: 'none', ...over });
+  new Solver(n, { ...defaultParams(), selfProp: false, ...over });
 const proj = (s: Solver, q: Float64Array, fn: (x: number) => number) => {
   let a = 0, w = 0;
   for (let j = 0; j < s.n; j++) for (let i = 0; i < s.n; i++) { const f = fn((i + 0.5) * s.h); a += q[j * s.n + i] * f; w += f * f; }

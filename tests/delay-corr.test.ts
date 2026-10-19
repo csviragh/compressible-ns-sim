@@ -18,26 +18,38 @@ describe('delay buffer', () => {
     expect(Array.from(ou)).toEqual(Array.from(f(now)));
   });
 
-  it('zero delays give exactly the undelayed dynamics', () => {
-    const a = new Solver(32, defaultParams()), b = new Solver(32, { ...defaultParams(), delayLame: true });
-    a.seedOrdered(4); b.seedOrdered(4);
-    for (let m = 0; m < 30; m++) { a.step(); b.step(); }
-    expect(Array.from(b.u)).toEqual(Array.from(a.u));
-    expect(b.history.frames.length).toBe(0);
+  it('split operator with self = neighbour field equals the undelayed Lamé operator', () => {
+    const s = new Solver(32, { ...defaultParams(), mu: 2e-3, lambda: 5e-3 }); s.seedRandom(7, 0.2);
+    for (let q = 0; q < s.u.length; q++) s.u[q] += 0.1 * Math.sin(q * 0.37);
+    const N = s.u.length, ax = new Float64Array(N), ay = new Float64Array(N), bx = new Float64Array(N), by = new Float64Array(N);
+    s.lame(s.u, s.v, ax, ay); s.lameSplit(s.u, s.v, s.u, s.v, bx, by);
+    let e = 0, m = 0; for (let q = 0; q < N; q++) { e = Math.max(e, Math.abs(ax[q] - bx[q]), Math.abs(ay[q] - by[q])); m = Math.max(m, Math.abs(ax[q])); }
+    expect(e / m).toBeLessThan(1e-13);
   });
 
-  it('a tiny delay is close to the undelayed run; a long delay with S·t > π/2 destabilises the ordered state', () => {
-    const base = { ...defaultParams(), mu: 1e-4, selfProp: false };
-    const a = new Solver(32, base), b = new Solver(32, { ...base, tSelf: 1e-3, tNb: 1e-3 });
-    a.seedRandom(2, 0.1); b.seedRandom(2, 0.1);
-    for (let m = 0; m < 60; m++) { a.step(); b.step(); }
-    let e = 0; for (let k = 0; k < a.u.length; k++) e = Math.max(e, Math.abs(a.u[k] - b.u[k]));
-    expect(e).toBeLessThan(2e-3);
-    // linear check of û' = −S û(t − t): perturbation grows when S·t > π/2 (here 4·1 = 4)
-    const c = new Solver(32, { ...base, tSelf: 1, tNb: 1, mu: 0, kernelStrength: 4 });
-    c.seedRandom(3, 1e-3); const amp0 = Math.max(...c.u.map(Math.abs));
-    for (let m = 0; m < 60 * 12; m++) c.step();
-    expect(Math.max(...c.u.map(Math.abs))).toBeGreaterThan(10 * amp0);
+  it('zero delays: stepping equals forward Euler with the undelayed operator, no history kept', () => {
+    const p = { ...defaultParams(), mu: 1e-3, lambda: 2e-3, selfProp: false };
+    const s = new Solver(32, p); s.seedRandom(4, 0.05);
+    const u = s.u.slice(), v = s.v.slice(), N = u.length, lx = new Float64Array(N), ly = new Float64Array(N);
+    const ns = Math.max(1, Math.ceil(p.dt * s.spectralBound() / 1.8)), d = p.dt / ns;
+    for (let m = 0; m < ns; m++) { s.lame(u, v, lx, ly); for (let q = 0; q < N; q++) { u[q] += d * lx[q]; v[q] += d * ly[q]; } }
+    s.viscous(p.dt);
+    for (let q = 0; q < N; q++) { expect(s.u[q]).toBeCloseTo(u[q], 13); expect(s.v[q]).toBeCloseTo(v[q], 13); }
+    for (let m = 0; m < 10; m++) s.step();
+    expect(s.history.frames.length).toBe(0);
+  });
+
+  it('equal delays: grid-scale checkerboard stable for Λ·t < π/2, unstable for Λ·t > π/2', () => {
+    // n = 32, μ = 1e-3, λ = −μ (pure shear-type stencil): checkerboard eigenvalue Λ = 8μ/h² = 8.19 /s
+    const grow = (t: number) => {
+      const s = new Solver(32, { ...defaultParams(), mu: 1e-3, lambda: -1e-3, selfProp: false, tSelf: t, tNb: t });
+      for (let j = 0; j < 32; j++) for (let i = 0; i < 32; i++) s.u[j * 32 + i] = 1e-3 * ((i + j) & 1 ? 1 : -1);
+      const a0 = Math.max(...s.u.map(Math.abs));
+      while (s.t < 8) s.step();
+      return Math.max(...s.u.map(Math.abs)) / a0;
+    };
+    expect(grow(0.1)).toBeLessThan(0.1);   // Λt = 0.82
+    expect(grow(0.4)).toBeGreaterThan(10); // Λt = 3.3
   });
 });
 
