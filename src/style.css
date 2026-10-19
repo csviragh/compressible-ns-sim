@@ -133,3 +133,5 @@ kbd {
 }
 [hidden] { display: none !important; }
 .warn { color: #e3b341; }
+label.row select { max-width: 175px; }
+#panel { overflow-x: hidden; }
