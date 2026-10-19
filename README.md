@@ -73,6 +73,7 @@ decays at (λ+2μ)k² and is carried/steepened by advection.
 * **Velocity-arrow overlay** (toggle, spacing and scale sliders).
 * Sliders: μ (log), λ, self-propulsion on/off, τ, v₀, grid (64/128/256), steps per frame.
 * HUD: grid, t, Δt, kinetic energy, ⟨|u|⟩, polar order |⟨u/|u|⟩|, rms ∇·u, total mass, min/max ρ.
+* URL parameter `?view=density` (or speed, vorticity, divergence, direction, dye) picks the start view.
 * Keys: `Space` pause, `S` step, `R` reset, `V` next view, `A` arrows, `H` hide panel.
 
 ## Tests (`npm test`)

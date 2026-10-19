@@ -54,6 +54,10 @@ const arrowsEl = $<HTMLInputElement>('arrows');
 arrowsEl.addEventListener('change', () => (arrows = arrowsEl.checked));
 const viewSel = $<HTMLSelectElement>('view');
 viewSel.addEventListener('change', () => (view = viewSel.value as View));
+{ // ?view=density etc. selects the initial view
+  const q = new URLSearchParams(location.search).get('view');
+  if (q && [...viewSel.options].some((o) => o.value === q)) { viewSel.value = q; view = q as View; }
+}
 $<HTMLSelectElement>('grid').addEventListener('change', (e) => build(parseInt((e.target as HTMLSelectElement).value)));
 $('random-init').onclick = () => init('random', seedFromInput());
 $('ordered-init').onclick = () => init('ordered', seedFromInput());
