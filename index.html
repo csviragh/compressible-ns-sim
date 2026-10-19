@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="Interactive 2D compressible Navier-Stokes simulator with Lamé viscous stress, running in the browser." />
+    <title>Compressible Navier–Stokes Simulator</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%92%A8%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <canvas id="sim" aria-label="Fluid simulation. Drag to push the fluid, click for a pressure pulse."></canvas>
+    <div id="hud"><span id="fps">-- fps</span><span id="stats"></span></div>
+    <button id="panel-toggle" class="icon-btn" title="Toggle controls (H)">☰</button>
+    <aside id="panel">
+      <header>
+        <h1>Compressible NS 2D</h1>
+        <p class="hint">Drag to push the fluid · click for a density/pressure pulse.</p>
+      </header>
+      <section class="buttons">
+        <button id="play" title="Space">⏸ Pause</button>
+        <button id="step" title="S">⏭ Step</button>
+        <button id="reset" title="R">⟲ Reset</button>
+      </section>
+      <section>
+        <label class="row">Preset
+          <select id="preset">
+            <option value="acoustic">Acoustic pulse</option>
+            <option value="kh">Shear layers (Kelvin–Helmholtz)</option>
+            <option value="jets">Colliding jets</option>
+            <option value="turbulence">Random turbulence</option>
+            <option value="stir">Rotating stirrer</option>
+            <option value="rest">Fluid at rest</option>
+          </select>
+        </label>
+        <label class="row">View
+          <select id="view">
+            <option value="density">Density ρ</option>
+            <option value="vorticity">Vorticity ω</option>
+            <option value="divergence">Divergence ∇·u (sound)</option>
+            <option value="speed">Speed |u|</option>
+            <option value="mach">Mach number</option>
+            <option value="dye">Dye</option>
+          </select>
+        </label>
+        <label class="row">Grid
+          <select id="grid">
+            <option value="64">64 × 64</option>
+            <option value="128">128 × 128</option>
+            <option value="256" selected>256 × 256</option>
+          </select>
+        </label>
+        <label class="slider">Steps per frame <output id="spf-out"></output>
+          <input type="range" id="spf" min="1" max="10" step="1" value="2" />
+        </label>
+      </section>
+      <section>
+        <h2>Viscosity (Lamé form)</h2>
+        <p class="hint mono">σ = μ(∇u + ∇uᵀ) + λ(∇·u) I</p>
+        <label class="slider">Shear viscosity μ <output id="mu-out"></output>
+          <input type="range" id="mu" min="-6" max="-1.5" step="0.05" />
+        </label>
+        <label class="slider">Second coefficient λ <output id="lambda-out"></output>
+          <input type="range" id="lambda" min="-0.01" max="0.03" step="0.00005" />
+        </label>
+        <label class="check"><input type="checkbox" id="stokes" /> Stokes hypothesis (λ = −μ, ζ = 0)</label>
+        <p class="hint mono" id="zeta"></p>
+      </section>
+      <section>
+        <h2>Equation of state</h2>
+        <label class="row">p(ρ)
+          <select id="eos">
+            <option value="isothermal">Isothermal p = c²ρ</option>
+            <option value="polytropic">Polytropic p = Kρ^γ</option>
+          </select>
+        </label>
+        <label class="slider">Sound speed c (at ρ = 1) <output id="c-out"></output>
+          <input type="range" id="c" min="0.2" max="3" step="0.05" />
+        </label>
+        <label class="slider" id="gamma-row">γ <output id="gamma-out"></output>
+          <input type="range" id="gamma" min="1" max="3" step="0.05" />
+        </label>
+      </section>
+      <details>
+        <summary>About the model</summary>
+        <div class="eq">∂ρ/∂t + ∇·(ρ<b>u</b>) = 0</div>
+        <div class="eq">∂(ρ<b>u</b>)/∂t + ∇·(ρ<b>u</b>⊗<b>u</b> + pI − σ) = <b>f</b></div>
+        <p>σ = μ(∇<b>u</b> + ∇<b>u</b>ᵀ) + λ(∇·<b>u</b>)I. In 2D σ = 2μ(D − ½tr D·I) + ζ(∇·<b>u</b>)I with
+          bulk viscosity ζ = λ + μ, so ζ ≥ 0 requires λ ≥ −μ (Stokes: λ = −μ). Sound waves damp at
+          (2μ + λ)k²/(2ρ), shear waves at μk²/ρ. Finite volume on the periodic unit square:
+          MUSCL–minmod + Rusanov flux, centred viscous fluxes, SSP-RK3, CFL-adaptive Δt.</p>
+        <p>Shortcuts: <kbd>Space</kbd> pause, <kbd>S</kbd> step, <kbd>R</kbd> reset, <kbd>V</kbd> next view, <kbd>H</kbd> hide panel.</p>
+      </details>
+    </aside>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
