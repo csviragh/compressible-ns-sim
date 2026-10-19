@@ -3,44 +3,48 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="description" content="Interactive 2D compressible Navier-Stokes simulator with Lamé viscous stress, running in the browser." />
-    <title>Compressible Navier–Stokes Simulator</title>
+    <meta name="description" content="Interactive 2D active fluid with a compressible velocity field and Lamé viscosity, running in the browser." />
+    <title>Compressible-velocity Lamé fluid</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%92%A8%3C/text%3E%3C/svg%3E" />
   </head>
   <body>
-    <canvas id="sim" aria-label="Fluid simulation. Drag to push the fluid, click for a pressure pulse."></canvas>
+    <canvas id="sim" aria-label="Fluid simulation. Drag to push the fluid."></canvas>
+    <canvas id="overlay" aria-hidden="true"></canvas>
     <div id="hud"><span id="fps">-- fps</span><span id="stats"></span></div>
     <button id="panel-toggle" class="icon-btn" title="Toggle controls (H)">☰</button>
     <aside id="panel">
       <header>
-        <h1>Compressible NS 2D</h1>
-        <p class="hint">Drag to push the fluid · click for a density/pressure pulse.</p>
+        <h1>Compressible-velocity fluid 2D</h1>
+        <p class="hint">No pressure projection: ∇·u ≠ 0 is allowed. Drag to push the fluid.</p>
       </header>
       <section class="buttons">
         <button id="play" title="Space">⏸ Pause</button>
         <button id="step" title="S">⏭ Step</button>
         <button id="reset" title="R">⟲ Reset</button>
       </section>
+      <section class="random-init">
+        <button id="random-init" class="wide" title="Random swirls (same generator as navier-stokes-sim)">🎲 Random initial conditions</button>
+        <button id="ordered-init" class="wide" title="Uniform flock along +x at v0 plus a small disordered swirl patch (⟨cos⟩ ≈ 0.95)">➡ Ordered + perturbation</button>
+        <label class="row">seed <input id="seed-input" type="text" inputmode="numeric" placeholder="random" size="10"></label>
+        <label class="row">amplitude <input id="seed-amp" type="number" value="0.05" min="0.001" max="1" step="0.01" style="width:5em"></label>
+        <p class="hint">last seed: <span id="seed-used">–</span></p>
+      </section>
       <section>
-        <label class="row">Preset
-          <select id="preset">
-            <option value="acoustic">Acoustic pulse</option>
-            <option value="kh">Shear layers (Kelvin–Helmholtz)</option>
-            <option value="jets">Colliding jets</option>
-            <option value="turbulence">Random turbulence</option>
-            <option value="stir">Rotating stirrer</option>
-            <option value="rest">Fluid at rest</option>
-          </select>
-        </label>
         <label class="row">View
           <select id="view">
-            <option value="density">Density ρ</option>
-            <option value="vorticity">Vorticity ω</option>
-            <option value="divergence">Divergence ∇·u (sound)</option>
+            <option value="direction">Velocity direction (hue)</option>
             <option value="speed">Speed |u|</option>
-            <option value="mach">Mach number</option>
+            <option value="vorticity">Vorticity ω</option>
+            <option value="divergence">Divergence ∇·u</option>
             <option value="dye">Dye</option>
           </select>
+        </label>
+        <label class="check"><input type="checkbox" id="arrows" checked /> Velocity arrows (A)</label>
+        <label class="slider">Arrow spacing (cells) <output id="aspace-out"></output>
+          <input type="range" id="aspace" min="4" max="32" step="1" />
+        </label>
+        <label class="slider">Arrow scale <output id="ascale-out"></output>
+          <input type="range" id="ascale" min="0.2" max="4" step="0.1" />
         </label>
         <label class="row">Grid
           <select id="grid">
@@ -50,45 +54,38 @@
           </select>
         </label>
         <label class="slider">Steps per frame <output id="spf-out"></output>
-          <input type="range" id="spf" min="1" max="10" step="1" value="2" />
+          <input type="range" id="spf" min="1" max="8" step="1" />
         </label>
       </section>
       <section>
-        <h2>Viscosity (Lamé form)</h2>
-        <p class="hint mono">σ = μ(∇u + ∇uᵀ) + λ(∇·u) I</p>
+        <h2>Lamé viscosity</h2>
+        <p class="hint mono">μ∇²u + (λ+μ)∇(∇·u) = ∇·[μ(∇u+∇uᵀ) + λ(∇·u)I]</p>
         <label class="slider">Shear viscosity μ <output id="mu-out"></output>
           <input type="range" id="mu" min="-6" max="-1.5" step="0.05" />
         </label>
-        <label class="slider">Second coefficient λ <output id="lambda-out"></output>
+        <label class="slider">Lamé coefficient λ <output id="lambda-out"></output>
           <input type="range" id="lambda" min="-0.01" max="0.03" step="0.00005" />
         </label>
-        <label class="check"><input type="checkbox" id="stokes" /> Stokes hypothesis (λ = −μ, ζ = 0)</label>
         <p class="hint mono" id="zeta"></p>
       </section>
       <section>
-        <h2>Equation of state</h2>
-        <label class="row">p(ρ)
-          <select id="eos">
-            <option value="isothermal">Isothermal p = c²ρ</option>
-            <option value="polytropic">Polytropic p = Kρ^γ</option>
-          </select>
+        <h2>Self-propulsion (active fluid)</h2>
+        <label class="check"><input type="checkbox" id="selfprop" checked /> Enable −(1/τ)(|u| − v₀)·u/|u|</label>
+        <label class="slider">Relaxation time τ (s) <output id="tau-out"></output>
+          <input type="range" id="tau" min="0.05" max="5" step="0.05" />
         </label>
-        <label class="slider">Sound speed c (at ρ = 1) <output id="c-out"></output>
-          <input type="range" id="c" min="0.2" max="3" step="0.05" />
-        </label>
-        <label class="slider" id="gamma-row">γ <output id="gamma-out"></output>
-          <input type="range" id="gamma" min="1" max="3" step="0.05" />
+        <label class="slider">Target speed v₀ <output id="v0-out"></output>
+          <input type="range" id="v0" min="0" max="2" step="0.01" />
         </label>
       </section>
       <details>
         <summary>About the model</summary>
-        <div class="eq">∂ρ/∂t + ∇·(ρ<b>u</b>) = 0</div>
-        <div class="eq">∂(ρ<b>u</b>)/∂t + ∇·(ρ<b>u</b>⊗<b>u</b> + pI − σ) = <b>f</b></div>
-        <p>σ = μ(∇<b>u</b> + ∇<b>u</b>ᵀ) + λ(∇·<b>u</b>)I. In 2D σ = 2μ(D − ½tr D·I) + ζ(∇·<b>u</b>)I with
-          bulk viscosity ζ = λ + μ, so ζ ≥ 0 requires λ ≥ −μ (Stokes: λ = −μ). Sound waves damp at
-          (2μ + λ)k²/(2ρ), shear waves at μk²/ρ. Finite volume on the periodic unit square:
-          MUSCL–MC + Rusanov flux, centred viscous fluxes, SSP-RK3, CFL-adaptive Δt.</p>
-        <p>Shortcuts: <kbd>Space</kbd> pause, <kbd>S</kbd> step, <kbd>R</kbd> reset, <kbd>V</kbd> next view, <kbd>H</kbd> hide panel.</p>
+        <div class="eq">∂<b>u</b>/∂t + (<b>u</b>·∇)<b>u</b> = μ∇²<b>u</b> + (λ+μ)∇(∇·<b>u</b>) − (1/τ)(|<b>u</b>| − v₀)<b>u</b>/|<b>u</b>| + <b>f</b></div>
+        <p>Like the Stable Fluids solver of navier-stokes-sim, but with no pressure and no
+          projection, so the velocity is free to compress. Shear (transverse) modes damp at μk²,
+          compressive (longitudinal) modes at (λ+2μ)k²; stability needs μ ≥ 0 and λ + 2μ ≥ 0
+          (λ is clamped). The viscous step is exact in Fourier space; advection is semi-Lagrangian.</p>
+        <p>Shortcuts: <kbd>Space</kbd> pause, <kbd>S</kbd> step, <kbd>R</kbd> reset, <kbd>V</kbd> next view, <kbd>A</kbd> arrows, <kbd>H</kbd> hide panel.</p>
       </details>
     </aside>
     <script type="module" src="/src/main.ts"></script>

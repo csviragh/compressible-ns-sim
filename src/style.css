@@ -23,7 +23,7 @@ canvas {
   display: block;
 }
 /* square simulation domain (side 1), centred in the window */
-#sim {
+#sim, #overlay {
   --side: min(100vw, 100vh);
   width: var(--side);
   height: var(--side);

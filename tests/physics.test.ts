@@ -1,99 +1,67 @@
 import { describe, it, expect } from 'vitest';
-import { Solver, defaultParams, clampLambda, bulkViscosity } from '../src/solver/solver';
-import { applyPreset, setState } from '../src/solver/presets';
+import { Solver, defaultParams, clampParams } from '../src/solver/solver';
 
 const mk = (n: number, over: Partial<ReturnType<typeof defaultParams>> = {}) =>
-  new Solver(n, { ...defaultParams(), ...over });
-
-/** Projection of field q(x) onto sin(kx) (k = 2π), averaged over y. */
-function sinAmp(s: Solver, q: (k: number) => number, fn: (x: number) => number) {
+  new Solver(n, { ...defaultParams(), selfProp: false, ...over });
+const proj = (s: Solver, q: Float64Array, fn: (x: number) => number) => {
   let a = 0, w = 0;
-  for (let j = 0; j < s.n; j++) for (let i = 0; i < s.n; i++) {
-    const f = fn((i + 0.5) * s.h); a += q(j * s.n + i) * f; w += f * f;
-  }
+  for (let j = 0; j < s.n; j++) for (let i = 0; i < s.n; i++) { const f = fn((i + 0.5) * s.h); a += q[j * s.n + i] * f; w += f * f; }
   return a / w;
-}
-const run = (s: Solver, T: number) => { while (s.t < T - 1e-12) s.step(T - s.t); };
+};
+const k = 2 * Math.PI, kap2 = (n: number) => (2 * n * Math.sin(Math.PI / n)) ** 2; // discrete k² for mode 1
 
-describe('compressible NS', () => {
-  it('conserves mass to round-off (turbulence + viscosity)', () => {
-    const s = mk(48, { mu: 1e-3, lambda: 2e-3 });
-    applyPreset(s, 'turbulence', 7);
-    const m0 = s.totalMass();
-    for (let k = 0; k < 150; k++) s.step();
-    expect(s.floorHits).toBe(0);
-    expect(Math.abs(s.totalMass() - m0) / m0).toBeLessThan(1e-12);
+describe('compressible-velocity Lamé fluid', () => {
+  const fn = (x: number) => Math.sin(k * x);
+
+  it('shear wave v = sin(kx) decays at μk²', () => {
+    const mu = 2e-3, s = mk(64, { mu, lambda: 5e-3 });
+    for (let j = 0; j < 64; j++) for (let i = 0; i < 64; i++) s.v[j * 64 + i] = 1e-3 * fn((i + 0.5) / 64);
+    const a0 = proj(s, s.v, fn), T = 2; while (s.t < T - 1e-9) s.step(0.01);
+    const rate = -Math.log(proj(s, s.v, fn) / a0) / T;
+    expect(Math.abs(rate - mu * k * k) / (mu * k * k)).toBeLessThan(0.01);
+    expect(Math.abs(rate - mu * kap2(64)) / (mu * kap2(64))).toBeLessThan(2e-3);
   });
 
-  it('conserves momentum on the torus', () => {
-    const s = mk(32, { mu: 1e-3 });
-    applyPreset(s, 'jets');
-    const P = () => s.mx.reduce((a, b) => a + b, 0);
-    const p0 = P();
-    for (let k = 0; k < 100; k++) s.step();
-    expect(Math.abs(P() - p0) * s.h * s.h).toBeLessThan(1e-12);
-  });
-
-  it('acoustic pulse propagates at speed ≈ c', () => {
-    for (const c of [0.5, 1]) {
-      const s = mk(256, { mu: 0, c });
-      // 1D Gaussian pulse in x, small amplitude; it splits into two fronts at ±c t
-      setState(s, (x) => [1 + 1e-3 * Math.exp(-((x - 0.5) ** 2) / (2 * 0.02 ** 2)), 0, 0, 0]);
-      const T = 0.3 / c;
-      run(s, T);
-      let best = 0, bi = 0;
-      for (let i = s.n / 2; i < s.n; i++) if (s.rho[i] > best) { best = s.rho[i]; bi = i; }
-      const xpk = (bi + 0.5) * s.h;
-      expect(Math.abs((xpk - 0.5) / T - c) / c).toBeLessThan(0.03);
+  it('longitudinal wave u = sin(kx) decays at (λ+2μ)k²', () => {
+    for (const [mu, lambda] of [[2e-3, 0], [2e-3, 6e-3], [2e-3, -3e-3]]) {
+      const s = mk(64, { mu, lambda });
+      for (let j = 0; j < 64; j++) for (let i = 0; i < 64; i++) s.u[j * 64 + i] = 1e-3 * fn((i + 0.5) / 64);
+      const a0 = proj(s, s.u, fn), T = 2; while (s.t < T - 1e-9) s.step(0.01);
+      const rate = -Math.log(proj(s, s.u, fn) / a0) / T, want = (lambda + 2 * mu) * k * k;
+      expect(Math.abs(rate - want) / want).toBeLessThan(0.01);
     }
   });
 
-  // The scheme's own (Rusanov/limiter) dissipation is measured with μ = λ = 0 and subtracted;
-  // it is reported so it stays small compared with the physical rates.
-  const shearRate = (mu: number, lambda: number) => {
-    const s = mk(64, { mu, lambda });
-    const fn = (x: number) => Math.sin(2 * Math.PI * x);
-    setState(s, (x) => [1, 0, 1e-3 * fn(x), 0]);
-    const a0 = sinAmp(s, (k) => s.my[k] / s.rho[k], fn);
-    const T = 1; run(s, T);
-    return -Math.log(sinAmp(s, (k) => s.my[k] / s.rho[k], fn) / a0) / T;
-  };
-  it('shear wave decays at rate μk²/ρ', () => {
-    const mu = 0.01, k = 2 * Math.PI, base = shearRate(0, 0), rate = shearRate(mu, 0.02);
-    console.log(`shear: numerical ${base.toExponential(2)}/s, total ${rate.toFixed(4)}, theory ${(mu * k * k).toFixed(4)}`);
-    expect(base).toBeLessThan(0.02 * mu * k * k);
-    expect(Math.abs(rate - base - mu * k * k) / (mu * k * k)).toBeLessThan(0.02);
+  it('self-propulsion drives |u| → v0', () => {
+    const s = new Solver(32, { ...defaultParams(), mu: 1e-4, selfProp: true, tau: 0.5, v0: 0.5 });
+    s.seedOrdered(3);
+    for (let m = 0; m < 600; m++) s.step();
+    expect(Math.abs(s.meanSpeed() - 0.5)).toBeLessThan(0.02);
+    // a uniform flow is exactly relaxed: |u| = v0 + (|u0| − v0) e^{−t/τ}
+    const q = mk(16, { selfProp: true, tau: 0.5, v0: 0.5 });
+    q.u.fill(0.1); for (let m = 0; m < 30; m++) q.step(1 / 60);
+    expect(q.u[0]).toBeCloseTo(0.5 - 0.4 * Math.exp(-0.5 / 0.5), 10);
   });
 
-  it('longitudinal (sound) wave damps at (2μ+λ)k²/(2ρ)', () => {
-    const soundRate = (mu: number, lambda: number) => {
-      const s = mk(64, { mu, lambda, c: 1 });
-      const fn = (x: number) => Math.sin(2 * Math.PI * x);
-      setState(s, (x) => [1, 1e-4 * fn(x), 0, 0]);
-      // quadratic acoustic energy: ½ρ₀u² + c²ρ'²/(2ρ₀); sampled at whole periods
-      const E = () => { let e = 0; for (let k = 0; k < s.rho.length; k++) { const u = s.mx[k] / s.rho[k]; e += u * u + (s.rho[k] - 1) ** 2; } return e; };
-      const e0 = E(), T = 4; run(s, T);
-      return -Math.log(E() / e0) / (2 * T);
-    };
-    const base = soundRate(0, 0), k = 2 * Math.PI;
-    for (const [mu, lambda] of [[5e-3, 0], [5e-3, 1e-2], [5e-3, -5e-3]]) {
-      const want = (2 * mu + lambda) * k * k / 2, rate = soundRate(mu, lambda);
-      console.log(`sound μ=${mu} λ=${lambda}: numerical ${base.toExponential(2)}/s, total ${rate.toFixed(4)}, theory ${want.toFixed(4)}`);
-      expect(Math.abs(rate - base - want) / want).toBeLessThan(0.03);
-    }
+  it('is periodic: a uniform flow translates a pattern around the torus unchanged in shape', () => {
+    const n = 64, s = mk(n, { mu: 0, lambda: 0 });
+    s.u.fill(0.5);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) s.dye[j * n + i] = Math.sin(k * (i + 0.5) / n) * Math.cos(k * (j + 0.5) / n);
+    const d0 = s.dye.slice();
+    // u Δt = h exactly → pure shifts; after n steps the pattern has wrapped once
+    for (let m = 0; m < n; m++) s.step(1 / (0.5 * n));
+    let err = 0; for (let q = 0; q < d0.length; q++) err = Math.max(err, Math.abs(s.dye[q] - d0[q]));
+    expect(err).toBeLessThan(1e-9);
+    // mean momentum is conserved by viscosity on the torus
+    const t = mk(32, { mu: 5e-3, lambda: 1e-2 }); t.seedRandom(9, 0.1); t.u.forEach((_, q) => (t.u[q] += 0.2));
+    const m0 = t.u.reduce((a, b) => a + b, 0); t.viscous(0.5);
+    expect(Math.abs(t.u.reduce((a, b) => a + b, 0) - m0) / 1024).toBeLessThan(1e-12);
   });
 
-  it('clamps λ so the bulk viscosity ζ = λ + μ ≥ 0', () => {
-    const p = { ...defaultParams(), mu: 1e-3, lambda: -5e-3 };
-    expect(clampLambda(p)).toBe(true);
-    expect(bulkViscosity(p)).toBe(0);
-  });
-
-  it('polytropic EOS runs stably and keeps ρ > 0 in colliding jets', () => {
-    const s = mk(48, { eos: 'polytropic', gamma: 1.4, mu: 5e-4 });
-    applyPreset(s, 'jets');
-    for (let k = 0; k < 200; k++) s.step();
-    expect(Math.min(...s.rho)).toBeGreaterThan(0);
-    expect(Number.isFinite(s.kineticEnergy())).toBe(true);
+  it('allows compression (∇·u ≠ 0) and clamps λ ≥ −2μ', () => {
+    const s = mk(32); for (let i = 0; i < 32 * 32; i++) s.u[i] = Math.sin(k * ((i % 32) + 0.5) / 32);
+    expect(s.rmsDivergence()).toBeGreaterThan(1);
+    const p = { ...defaultParams(), mu: 1e-3, lambda: -1 };
+    expect(clampParams(p)).toBe(true); expect(p.lambda + 2 * p.mu).toBe(0);
   });
 });
