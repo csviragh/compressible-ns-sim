@@ -46,7 +46,7 @@ L_delayed[u](x, t) = D·u(x, t − t_self) + N[u(·, t − t_nb)](x)
 the grid-scale checkerboard mode (k = (π/h, π/h)) obeys `â' = −Λ_cb â(t − t)` with Λ_cb = 8μ/h²
 (transverse) or (8μ + 4(λ+μ))/h² (compressive). This delay equation is unstable for **Λ_cb·t > π/2**,
 the same criterion as the delayed local viscosity in navier-stokes-sim (8νt/h² = π/2). At the default
-μ = 1e-4 on 256², Λ_cb ≈ 52 /s, so already t ≳ 0.03 s destabilises the grid scale; smaller μ or a
+μ = 1e-4, λ = 0 on 256², Λ_cb ≈ 52 /s (shear) and 79 /s (compressive), so already t ≳ 0.02 s destabilises the grid scale; smaller μ or a
 coarser grid moves the threshold up (t_c ∝ h²/μ). Unequal delays give a two-delay characteristic equation
 μ = D e^{−μ t_self} + N̂(k) e^{−μ t_nb}. No hidden regularisation is added; the panel shows Λ_cb·t and warns above π/2.
 
