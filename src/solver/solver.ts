@@ -6,7 +6,7 @@
  *   σ = μ(∇u + ∇uᵀ) + λ(∇·u)I        (Lamé form; 2D bulk viscosity ζ = λ + μ)
  *   p = c²ρ (isothermal)  or  p = Kρ^γ with K = c²/γ (so c is the sound speed at ρ = 1)
  *
- * Finite volume: MUSCL (minmod, primitive variables) + Rusanov flux, centred
+ * Finite volume: MUSCL (MC limiter, primitive variables) + Rusanov flux, centred
  * face-based viscous fluxes, SSP-RK3, CFL-adaptive dt. A passive dye s is carried
  * as the conserved quantity ρs.
  */
@@ -35,8 +35,11 @@ export function clampLambda(p: Params): boolean {
   return false;
 }
 
-function minmod(a: number, b: number): number {
-  return a * b <= 0 ? 0 : Math.abs(a) < Math.abs(b) ? a : b;
+/** Monotonized-central (MC) limiter: full limited slope from one-sided differences a, b. */
+function mc(a: number, b: number): number {
+  if (a * b <= 0) return 0;
+  const m = Math.min(2 * Math.abs(a), 2 * Math.abs(b), 0.5 * Math.abs(a + b));
+  return a > 0 ? m : -m;
 }
 
 export class Solver {
@@ -129,8 +132,8 @@ export class Solver {
           // normal (un) and tangential (ut) velocity
           const un = dir === 0 ? u : v, ut = dir === 0 ? v : u;
           // reconstruct ρ, un, ut, s
-          const sb = (q: Float64Array) => 0.5 * minmod(q[kb] - q[ka], q[kc] - q[kb]);
-          const sc = (q: Float64Array) => 0.5 * minmod(q[kc] - q[kb], q[ke] - q[kc]);
+          const sb = (q: Float64Array) => 0.5 * mc(q[kb] - q[ka], q[kc] - q[kb]);
+          const sc = (q: Float64Array) => 0.5 * mc(q[kc] - q[kb], q[ke] - q[kc]);
           let rL = R[kb] + sb(R), rR = R[kc] - sc(R);
           let nL = un[kb] + sb(un), nR = un[kc] - sc(un);
           let tL = ut[kb] + sb(ut), tR = ut[kc] - sc(ut);

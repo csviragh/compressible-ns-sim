@@ -47,7 +47,7 @@ Linear damping rates about ρ₀ = 1 (wavenumber k):
 ## Numerics
 
 * Cell-centred finite volume, conservative variables (ρ, ρu, ρv, ρs).
-* MUSCL reconstruction of primitives (ρ, u, v, s) with the minmod limiter, **Rusanov**
+* MUSCL reconstruction of primitives (ρ, u, v, s) with the monotonized-central (MC) limiter, **Rusanov**
   (local Lax–Friedrichs) flux with wave speed |uₙ| + c(ρ).
 * Viscous fluxes centred on faces: compact normal derivatives across the face, tangential
   derivatives averaged from neighbouring cell-centred differences (no odd–even decoupling).

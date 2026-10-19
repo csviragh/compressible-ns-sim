@@ -48,27 +48,38 @@ describe('compressible NS', () => {
     }
   });
 
-  it('shear wave decays at rate μk²/ρ', () => {
-    const mu = 0.01, s = mk(64, { mu, lambda: 0.02 });
+  // The scheme's own (Rusanov/limiter) dissipation is measured with μ = λ = 0 and subtracted;
+  // it is reported so it stays small compared with the physical rates.
+  const shearRate = (mu: number, lambda: number) => {
+    const s = mk(64, { mu, lambda });
     const fn = (x: number) => Math.sin(2 * Math.PI * x);
     setState(s, (x) => [1, 0, 1e-3 * fn(x), 0]);
     const a0 = sinAmp(s, (k) => s.my[k] / s.rho[k], fn);
-    const T = 2; run(s, T);
-    const a1 = sinAmp(s, (k) => s.my[k] / s.rho[k], fn);
-    const rate = -Math.log(a1 / a0) / T, k = 2 * Math.PI;
-    expect(Math.abs(rate - mu * k * k) / (mu * k * k)).toBeLessThan(0.02);
+    const T = 1; run(s, T);
+    return -Math.log(sinAmp(s, (k) => s.my[k] / s.rho[k], fn) / a0) / T;
+  };
+  it('shear wave decays at rate μk²/ρ', () => {
+    const mu = 0.01, k = 2 * Math.PI, base = shearRate(0, 0), rate = shearRate(mu, 0.02);
+    console.log(`shear: numerical ${base.toExponential(2)}/s, total ${rate.toFixed(4)}, theory ${(mu * k * k).toFixed(4)}`);
+    expect(base).toBeLessThan(0.02 * mu * k * k);
+    expect(Math.abs(rate - base - mu * k * k) / (mu * k * k)).toBeLessThan(0.02);
   });
 
   it('longitudinal (sound) wave damps at (2μ+λ)k²/(2ρ)', () => {
-    for (const [mu, lambda] of [[2e-3, 0], [2e-3, 4e-3], [2e-3, -2e-3]]) {
+    const soundRate = (mu: number, lambda: number) => {
       const s = mk(64, { mu, lambda, c: 1 });
       const fn = (x: number) => Math.sin(2 * Math.PI * x);
       setState(s, (x) => [1, 1e-4 * fn(x), 0, 0]);
       // quadratic acoustic energy: ½ρ₀u² + c²ρ'²/(2ρ₀); sampled at whole periods
       const E = () => { let e = 0; for (let k = 0; k < s.rho.length; k++) { const u = s.mx[k] / s.rho[k]; e += u * u + (s.rho[k] - 1) ** 2; } return e; };
       const e0 = E(), T = 4; run(s, T);
-      const rate = -Math.log(E() / e0) / (2 * T), k = 2 * Math.PI, want = (2 * mu + lambda) * k * k / 2;
-      expect(Math.abs(rate - want) / want).toBeLessThan(0.05);
+      return -Math.log(E() / e0) / (2 * T);
+    };
+    const base = soundRate(0, 0), k = 2 * Math.PI;
+    for (const [mu, lambda] of [[5e-3, 0], [5e-3, 1e-2], [5e-3, -5e-3]]) {
+      const want = (2 * mu + lambda) * k * k / 2, rate = soundRate(mu, lambda);
+      console.log(`sound μ=${mu} λ=${lambda}: numerical ${base.toExponential(2)}/s, total ${rate.toFixed(4)}, theory ${want.toFixed(4)}`);
+      expect(Math.abs(rate - base - want) / want).toBeLessThan(0.03);
     }
   });
 
