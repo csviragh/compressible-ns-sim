@@ -137,7 +137,7 @@ function drawArrows() {
   const { n, u, v } = solver, W = over.width, cell = W / n, step = Math.max(2, Math.round(aSpace * n / 256));
   let mx = 1e-9; for (let k = 0; k < u.length; k++) mx = Math.max(mx, Math.hypot(u[k], v[k]));
   const L = aScale * step * cell * 0.9 / mx;
-  octx.strokeStyle = 'rgba(255,255,255,0.85)'; octx.fillStyle = octx.strokeStyle; octx.lineWidth = Math.max(1, dpr);
+  octx.strokeStyle = view === 'density' ? 'rgba(20,20,30,0.8)' : 'rgba(255,255,255,0.85)'; octx.fillStyle = octx.strokeStyle; octx.lineWidth = Math.max(1, dpr);
   for (let j = step >> 1; j < n; j += step) for (let i = step >> 1; i < n; i += step) {
     const k = j * n + i, x = (i + 0.5) * cell, y = W - (j + 0.5) * cell, ax = u[k] * L, ay = -v[k] * L, len = Math.hypot(ax, ay);
     if (len < 0.5) continue;
