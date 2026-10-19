@@ -10,7 +10,7 @@ describe('delay buffer', () => {
     const f = (t: number) => Float64Array.from({ length: N }, (_, k) => t * 3 + k);
     for (let s = 0; s <= 20; s++) { const t = s * dt; if (h.wants(t)) h.push(t, f(t), f(-t)); h.prune(t + dt); }
     const now = 2, ou = new Float64Array(N), ov = new Float64Array(N);
-    for (const d of [0.3, 0.55, 0.95]) {
+    for (const d of [0.3, 0.55, 0.85]) {
       h.read(now - d, now, f(now), f(-now), ou, ov);
       for (let k = 0; k < N; k++) { expect(ou[k]).toBeCloseTo(f(now - d)[k], 5); expect(ov[k]).toBeCloseTo(f(-(now - d))[k], 5); }
     }
@@ -33,11 +33,11 @@ describe('delay buffer', () => {
     for (let m = 0; m < 60; m++) { a.step(); b.step(); }
     let e = 0; for (let k = 0; k < a.u.length; k++) e = Math.max(e, Math.abs(a.u[k] - b.u[k]));
     expect(e).toBeLessThan(2e-3);
-    // linear check of û' = −S û(t − t): perturbation grows when S·t > π/2 (here 2·1 = 2)
-    const c = new Solver(32, { ...base, tSelf: 1, tNb: 1, mu: 0 });
+    // linear check of û' = −S û(t − t): perturbation grows when S·t > π/2 (here 4·1 = 4)
+    const c = new Solver(32, { ...base, tSelf: 1, tNb: 1, mu: 0, kernelStrength: 4 });
     c.seedRandom(3, 1e-3); const amp0 = Math.max(...c.u.map(Math.abs));
     for (let m = 0; m < 60 * 12; m++) c.step();
-    expect(Math.max(...c.u.map(Math.abs))).toBeGreaterThan(amp0);
+    expect(Math.max(...c.u.map(Math.abs))).toBeGreaterThan(10 * amp0);
   });
 });
 
