@@ -80,6 +80,66 @@
           <input type="range" id="v0" min="0" max="2" step="0.01" />
         </label>
       </section>
+      <section>
+        <h2>Long-range alignment</h2>
+        <label class="row">Kernel
+          <select id="kernel">
+            <option value="none">None</option>
+            <option value="gaussian">Gaussian</option>
+            <option value="cucker-smale" selected>Cucker–Smale flocking</option>
+            <option value="power">Power law</option>
+            <option value="fractional">Fractional Laplacian</option>
+          </select>
+        </label>
+        <label class="slider">Strength S (1/s; ν_s for fractional) <output id="kS-out"></output>
+          <input type="range" id="kS" min="-5" max="1.5" step="0.05" />
+        </label>
+        <label class="slider">Range R <output id="kR-out"></output>
+          <input type="range" id="kR" min="0.005" max="0.3" step="0.005" />
+        </label>
+        <label class="slider">Cucker–Smale exponent β <output id="kB-out"></output>
+          <input type="range" id="kB" min="0.1" max="3" step="0.05" />
+        </label>
+        <label class="slider">Power-law exponent α <output id="kA-out"></output>
+          <input type="range" id="kA" min="0.5" max="5" step="0.1" />
+        </label>
+        <label class="slider">Fractional order s <output id="kF-out"></output>
+          <input type="range" id="kF" min="0.05" max="1" step="0.05" />
+        </label>
+        <p class="hint">S∫K(|x−y|)(<b>u</b>(y) − <b>u</b>(x))dy with ∫K = 1, or −ν_s(−Δ)<sup>s</sup><b>u</b>; exact in Fourier space when undelayed.</p>
+      </section>
+      <section>
+        <h2>Delays (own velocity vs neighbours)</h2>
+        <label class="slider" title="How old the point's OWN velocity is when it reacts">Own-velocity delay t<sub>self</sub> <output id="dS-out"></output>
+          <input type="range" id="dS" min="0" max="2" step="0.01" />
+        </label>
+        <label class="slider" title="How old the NEIGHBOURS' velocities are when they arrive">Neighbour delay t<sub>nb</sub> <output id="dN-out"></output>
+          <input type="range" id="dN" min="0" max="2" step="0.01" />
+        </label>
+        <label class="check"><input type="checkbox" id="d-lock" checked /> Lock t<sub>self</sub> = t<sub>nb</sub></label>
+        <label class="check" title="S[(K*u)(t − t_nb) − u(t − t_self)]"><input type="checkbox" id="d-kernel" checked /> Apply to long-range kernel</label>
+        <label class="check" title="WARNING: a delayed local viscosity is unstable at grid scale (checkerboard) once the delay is comparable to h²/μ — in navier-stokes-sim at 8νt/h² = π/2. Self/diagonal part at t − t_self, neighbour part at t − t_nb; explicit."><input type="checkbox" id="d-lame" /> Apply to Lamé operator too ⚠</label>
+        <p class="hint mono" id="d-info"></p>
+        <p class="hint">Eulerian read: the past field is taken at the fixed grid point x (ring buffer of past
+          velocity fields, linear interpolation in time, read at the step midpoint).</p>
+      </section>
+      <details id="corr-panel" class="panel-details" open>
+        <summary><h2>Order parameter / correlations</h2></summary>
+        <label class="check" title="Analyse the velocity field every few frames"><input type="checkbox" id="corr-on" />
+          Compute (every 6 frames)</label>
+        <canvas id="corr-hist" class="corr-plot" width="240" height="80" aria-label="Histogram of pairwise alignment cos θ_ij"></canvas>
+        <canvas id="corr-r" class="corr-plot" width="240" height="80" aria-label="Velocity correlation C(r)"></canvas>
+        <canvas id="corr-t" class="corr-plot" width="240" height="60" aria-label="Time series of the mean pairwise alignment, φ and ξ"></canvas>
+        <p class="hint mono" id="corr-info"></p>
+        <p class="hint">Over pairs of cells i ≠ j with direction v̂ = <b>u</b>/|<b>u</b>| (cells slower than
+          2 % of the mean speed have no direction and are left out): the distribution of cos θ<sub>ij</sub> =
+          v̂<sub>i</sub>·v̂<sub>j</sub> (30 000 random pairs) and its exact mean
+          ⟨cos θ<sub>ij</sub>⟩ = (|Σv̂|² − N)/(N(N − 1)) ≈ φ<sub>dir</sub>² — 1 for a perfect flock, 0 for random
+          directions. C(r) = ⟨v̂(x)·v̂(x + r)⟩ (blue) and the connected C(r) of the fluctuations
+          δv̂ = v̂ − ⟨v̂⟩ (green, Cavagna et al. 2010), radially averaged via FFT (wrapping on periodic axes,
+          zero-padded at walls). ξ = first zero of the connected C(r).</p>
+      </details>
+
       <details>
         <summary>About the model</summary>
         <div class="eq">∂<b>u</b>/∂t + (<b>u</b>·∇)<b>u</b> = μ∇²<b>u</b> + (λ+μ)∇(∇·<b>u</b>) − (1/τ)(|<b>u</b>| − v₀)<b>u</b>/|<b>u</b>| + <b>f</b></div>

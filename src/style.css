@@ -135,3 +135,26 @@ kbd {
 .warn { color: #e3b341; }
 label.row select { max-width: 175px; }
 #panel { overflow-x: hidden; }
+
+@media (max-width: 600px) {
+  #panel { width: auto; left: 10px; top: auto; height: 45vh; }
+}
+#trace { position: fixed; inset: auto; left: 10px; top: 36px; width: 280px; height: 84px; pointer-events: none; background: rgba(0,0,0,0.45); border-radius: 6px; }
+#k-plot { position: static; inset: auto; touch-action: auto; cursor: default; display: block; width: 100%; height: 80px; margin: 6px 0; background: rgba(0,0,0,0.25); border-radius: 4px; }
+[hidden] { display: none !important; }
+.subsection { margin: 8px 0 4px; padding: 6px 8px; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; }
+.subsection h3 { font-size: 11px; margin: 0 0 4px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.subsection h4 { font-size: 11px; margin: 6px 0 2px; color: var(--fg); font-weight: 600; }
+.regime-ok { color: #7ee787; }
+.regime-warn { color: #e3b341; }
+.regime-bad { color: #ff7b72; }
+
+.corr-plot { position: static; inset: auto; touch-action: auto; cursor: default; display: block; width: 100%; height: 80px; margin: 6px 0; background: rgba(0,0,0,0.25); border-radius: 4px; }
+#corr-t { height: 60px; }
+.panel-details { padding: 10px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.07); line-height: normal; }
+.panel-details > summary { list-style: none; }
+.panel-details > summary::-webkit-details-marker { display: none; }
+.panel-details > summary h2 { display: inline; margin: 0; }
+.panel-details > summary::before { content: '▸ '; color: var(--muted); font-size: 11px; }
+.panel-details[open] > summary::before { content: '▾ '; }
+.panel-details[open] > summary { margin-bottom: 6px; }

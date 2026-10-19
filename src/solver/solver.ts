@@ -14,6 +14,20 @@
  * periodic) → exact self-propulsion relaxation |u| → v₀ + (|u| − v₀)e^{−Δt/τ}.
  */
 import { FFT2 } from './fft';
+import { FieldHistory } from './delay';
+
+export type KernelType = 'none' | 'gaussian' | 'cucker-smale' | 'power' | 'fractional';
+
+/** Unnormalised radial kernel profile (as in navier-stokes-sim). */
+export function kernelProfile(kind: KernelType, R: number, beta: number, alpha: number, r: number): number {
+  R = Math.max(R, 1e-9);
+  switch (kind) {
+    case 'gaussian': return Math.exp(-(r * r) / (2 * R * R));
+    case 'cucker-smale': return (1 + (r * r) / (R * R)) ** -beta;
+    case 'power': return (r * r + R * R) ** (-alpha / 2);
+    default: return 0;
+  }
+}
 
 export interface Params {
   mu: number;       // shear viscosity μ
@@ -23,10 +37,19 @@ export interface Params {
   v0: number;       // target speed v₀
   dt: number;       // time step (s)
   dyeFade: number;  // 1/s
+  /** Long-range alignment S∫K(|x−y|)(u(y) − u(x))dy (∫K = 1) or −ν_s(−Δ)^s u. */
+  kernel: KernelType;
+  kernelStrength: number; kernelRange: number; kernelBeta: number; kernelAlpha: number; kernelS: number;
+  /** Delays (s): own velocity read at t − t_self, neighbours' at t − t_nb. */
+  tSelf: number; tNb: number;
+  /** Apply the delays to the kernel term (default true) / to the Lamé operator (default false). */
+  delayKernel: boolean; delayLame: boolean;
 }
 
 export const defaultParams = (): Params => ({
   mu: 1e-4, lambda: 0, selfProp: true, tau: 0.5, v0: 0.5, dt: 1 / 60, dyeFade: 0,
+  kernel: 'cucker-smale', kernelStrength: 2, kernelRange: 0.05, kernelBeta: 1, kernelAlpha: 3, kernelS: 0.5,
+  tSelf: 0, tNb: 0, delayKernel: true, delayLame: false,
 });
 
 /** Longitudinal (compressive) viscosity λ + 2μ. */
@@ -59,6 +82,9 @@ export class Solver {
   private ur: Float64Array; private ui: Float64Array; private vr: Float64Array; private vi: Float64Array;
   private tmp: Float64Array; private tmp2: Float64Array;
   private kap: Float64Array; // modified wavenumber 2 sin(kh/2)/h per index
+  readonly history = new FieldHistory();
+  private du: Float64Array; private dv: Float64Array; private su: Float64Array; private sv: Float64Array;
+  private symKey = ''; private sym: Float64Array; private symDiag = 0;
 
   constructor(n = 256, params: Params = defaultParams()) {
     this.n = n; this.h = 1 / n; this.params = params;
@@ -66,11 +92,12 @@ export class Solver {
     this.u = A(); this.v = A(); this.dye = A(); this.rho = A().fill(1); this.r1 = A(); this.dr = A(); this.fx = A(); this.fy = A();
     this.ur = A(); this.ui = A(); this.vr = A(); this.vi = A(); this.tmp = A(); this.tmp2 = A();
     this.fft = new FFT2(n);
+    this.du = A(); this.dv = A(); this.su = A(); this.sv = A(); this.sym = A();
     this.kap = new Float64Array(n);
     for (let i = 0; i < n; i++) { const m = i <= n / 2 ? i : i - n; this.kap[i] = (2 / this.h) * Math.sin(Math.PI * m / n); }
   }
 
-  reset() { this.u.fill(0); this.v.fill(0); this.dye.fill(0); this.fx.fill(0); this.fy.fill(0); this.rho.fill(1); this.floorHits = 0; this.t = 0; }
+  reset() { this.u.fill(0); this.v.fill(0); this.dye.fill(0); this.fx.fill(0); this.fy.fill(0); this.rho.fill(1); this.floorHits = 0; this.t = 0; this.history.clear(); }
 
   /** Exact Lamé viscous step: transverse part × e^{−μκ²Δt}, longitudinal × e^{−(λ+2μ)κ²Δt}. */
   viscous(dt: number) {
@@ -159,11 +186,103 @@ export class Solver {
     }
   }
 
+  // ---------- long-range kernel ----------
+  private kernelOn() { const p = this.params; return p.kernel !== 'none' && p.kernelStrength > 0; }
+  /** Fourier symbol: K̂(k) (normalised, K̂(0) = 1) or the fractional λ(k)^s; symDiag = its mean (the self part). */
+  private kernelSymbol(): Float64Array {
+    const p = this.params, { n, h } = this;
+    const key = [p.kernel, p.kernelRange, p.kernelBeta, p.kernelAlpha, p.kernelS, n].join();
+    if (key === this.symKey) return this.sym;
+    const re = this.sym, im = new Float64Array(n * n);
+    if (p.kernel === 'fractional') {
+      let m = 0;
+      for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const l = (this.kap[i] ** 2 + this.kap[j] ** 2) ** p.kernelS; re[j * n + i] = l; m += l; }
+      this.symDiag = m / (n * n);
+    } else {
+      let sum = 0;
+      for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+        const v = kernelProfile(p.kernel, p.kernelRange, p.kernelBeta, p.kernelAlpha, h * Math.hypot(Math.min(i, n - i), Math.min(j, n - j)));
+        re[j * n + i] = v; sum += v;
+      }
+      for (let k = 0; k < n * n; k++) re[k] /= sum;
+      this.fft.fft2(re, im); // real and even → real symbol
+      this.symDiag = 1;
+    }
+    this.symKey = key; return re;
+  }
+  /** out = IFFT(mult · FFT(q)) for real q. */
+  private filter(q: Float64Array, mult: (k: number) => number, out: Float64Array) {
+    const { ur, ui } = this; ur.set(q); ui.fill(0); this.fft.fft2(ur, ui);
+    for (let k = 0; k < ur.length; k++) { const m = mult(k); ur[k] *= m; ui[k] *= m; }
+    this.fft.fft2(ur, ui, true); out.set(ur);
+  }
+  /** Undelayed kernel step, exact: û ← û·exp(S(K̂ − 1)Δt), fractional û ← û·exp(−ν_s λ^s Δt). */
+  private kernelExact(dt: number) {
+    const p = this.params, sym = this.kernelSymbol(), S = p.kernelStrength, frac = p.kernel === 'fractional';
+    const f = (k: number) => Math.exp((frac ? -S * sym[k] : S * (sym[k] - 1)) * dt);
+    this.filter(this.u, f, this.u); this.filter(this.v, f, this.v);
+  }
+  /**
+   * Delayed kernel term  S[(K*u)(t − t_nb) − u(t − t_self)]  (fractional: −ν_s[(λ^s − G₀)*u(t − t_nb) + G₀u(t − t_self)]).
+   * Explicit in time; with t_self = 0 the own-velocity part is implicit, u ← (u + aK*u_d)/(1 + a).
+   */
+  private kernelDelayed(dt: number, T: number) {
+    const p = this.params, sym = this.kernelSymbol(), S = p.kernelStrength, frac = p.kernel === 'fractional', G0 = this.symDiag;
+    const { u, v, du, dv, su, sv } = this;
+    this.history.read(T - p.tNb, this.t, u, v, du, dv);
+    const nb = frac ? (k: number) => -(sym[k] - G0) : (k: number) => sym[k];
+    this.filter(du, nb, du); this.filter(dv, nb, dv);
+    if (p.tSelf <= 0) {
+      const a = S * dt * G0;
+      for (let k = 0; k < u.length; k++) { u[k] = (u[k] + S * dt * du[k]) / (1 + a); v[k] = (v[k] + S * dt * dv[k]) / (1 + a); }
+      return;
+    }
+    this.history.read(T - p.tSelf, this.t, u, v, su, sv);
+    for (let k = 0; k < u.length; k++) { u[k] += S * dt * (du[k] - G0 * su[k]); v[k] += S * dt * (dv[k] - G0 * sv[k]); }
+  }
+  /**
+   * Delayed Lamé operator (optional): the diagonal (self) part D of the discrete operator acts on
+   * u(t − t_self), the rest on u(t − t_nb). Explicit. Warning: like the delayed local viscosity in
+   * navier-stokes-sim this is unstable at grid scale once the delay is comparable to h²/μ.
+   */
+  private lameDelayed(dt: number, T: number) {
+    const { mu, lambda, tSelf, tNb } = this.params, { n, kap, u, v, du, dv, su, sv, ur, ui, vr, vi } = this;
+    if (mu === 0 && lambda === 0) return;
+    this.history.read(T - tNb, this.t, u, v, du, dv);
+    this.history.read(T - tSelf, this.t, u, v, su, sv);
+    // D = mean over k of the symbol diagonal: (μκ² + (λ+μ)κ_x²) → μ·4/h²·2/2… computed numerically
+    let D = 0; for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) D += mu * (kap[i] ** 2 + kap[j] ** 2) + (lambda + mu) * kap[i] ** 2;
+    D /= n * n;
+    ur.set(du); ui.fill(0); vr.set(dv); vi.fill(0); this.fft.fft2(ur, ui); this.fft.fft2(vr, vi);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const k = j * n + i, kx = kap[i], ky = kap[j], k2 = kx * kx + ky * ky, b = lambda + mu;
+      const ar = ur[k], ai = ui[k], br = vr[k], bi = vi[k];
+      // −(L) û with L = μκ²I + (λ+μ)κκᵀ, minus the diagonal part D (applied to the self field below)
+      ur[k] = -(mu * k2 + b * kx * kx - D) * ar - b * kx * ky * br; ui[k] = -(mu * k2 + b * kx * kx - D) * ai - b * kx * ky * bi;
+      vr[k] = -(mu * k2 + b * ky * ky - D) * br - b * kx * ky * ar; vi[k] = -(mu * k2 + b * ky * ky - D) * bi - b * kx * ky * ai;
+    }
+    this.fft.fft2(ur, ui, true); this.fft.fft2(vr, vi, true);
+    for (let k = 0; k < u.length; k++) { u[k] += dt * (ur[k] - D * su[k]); v[k] += dt * (vr[k] - D * sv[k]); }
+  }
+  /** Longest delay the history must cover (0 = nothing delayed). */
+  delayMax(): number {
+    const p = this.params, any = (p.delayKernel && this.kernelOn()) || p.delayLame;
+    return any ? Math.max(p.tSelf, p.tNb) : 0;
+  }
+
   step(dt = this.params.dt) {
     clampParams(this.params);
-    const N = this.u.length;
+    const N = this.u.length, p = this.params, tauMax = this.delayMax();
+    if (tauMax > 0) {
+      const h = this.history;
+      h.configure(N, N, dt, tauMax + dt, 256 * 2 ** 20);
+      if (h.wants(this.t)) h.push(this.t, this.u, this.v);
+      h.prune(this.t + dt);
+    } else if (this.history.frames.length) this.history.clear();
+    const T = this.t + 0.5 * dt; // delayed fields are read at the step midpoint
     for (let k = 0; k < N; k++) { this.u[k] += dt * this.fx[k]; this.v[k] += dt * this.fy[k]; }
-    this.viscous(dt);
+    if (p.delayLame && tauMax > 0) this.lameDelayed(dt, T); else this.viscous(dt);
+    if (this.kernelOn()) { if (p.delayKernel && tauMax > 0) this.kernelDelayed(dt, T); else this.kernelExact(dt); }
     this.advectDensity(dt);
     this.advect(dt);
     if (this.params.selfProp) this.selfPropulsion(dt);

@@ -1,5 +1,7 @@
 import './style.css';
 import { Solver, defaultParams, clampParams, bulkViscosity, longitudinalViscosity } from './solver/solver';
+import { CorrelationPanel } from './ui/correlations';
+import type { KernelType } from './solver/solver';
 import { viridis, diverging, hsv, type LUT } from './render/colormaps';
 
 type View = 'density' | 'direction' | 'speed' | 'vorticity' | 'divergence' | 'dye';
@@ -17,9 +19,10 @@ function seedFromInput(): number {
   const s = /^\d+$/.test(t) && Number(t) <= 0xffffffff ? Number(t) >>> 0 : freshSeed();
   $('seed-used').textContent = String(s); return s;
 }
+const corrPanel = new CorrelationPanel();
 let lastInit: 'ordered' | 'random' = 'ordered', lastSeed = 1;
 function init(kind = lastInit, seed = lastSeed) {
-  lastInit = kind; lastSeed = seed;
+  lastInit = kind; lastSeed = seed; corrPanel.reset();
   if (kind === 'ordered') solver.seedOrdered(seed);
   else solver.seedRandom(seed, parseFloat($<HTMLInputElement>('seed-amp').value) || 0.05);
 }
@@ -47,7 +50,26 @@ function refresh() {
   lamEl.value = String(params.lambda); $('lambda-out').textContent = fmt(params.lambda);
   $('zeta').innerHTML = `λ + 2μ = ${fmt(longitudinalViscosity(params))} (compressive) · ζ = λ + μ = ${fmt(bulkViscosity(params))}` +
     (clamped ? '<br><span class="warn">λ clamped to −2μ: λ + 2μ < 0 is ill-posed (anti-diffusion)</span>' : '');
+  const di = document.getElementById('d-info');
+  if (di) {
+    const on = [params.delayKernel && params.kernel !== 'none' ? 'kernel' : '', params.delayLame ? 'Lamé' : ''].filter(Boolean).join(' + ') || 'nothing';
+    const St = params.kernelStrength * params.tSelf;
+    di.innerHTML = `delays act on: ${on}` + (params.kernel !== 'none' && params.kernel !== 'fractional' ? ` · S·t_self = ${St.toFixed(2)}${St > Math.PI / 2 ? ' <span class="warn">(> π/2)</span>' : ''}` : '') +
+      (solver ? ` · history ${solver.history.frames.length} frames` : '');
+  }
 }
+bindSlider('kS', () => params.kernelStrength, (v) => (params.kernelStrength = v), Math.log10, (v) => 10 ** v);
+bindSlider('kR', () => params.kernelRange, (v) => (params.kernelRange = v));
+bindSlider('kB', () => params.kernelBeta, (v) => (params.kernelBeta = v));
+bindSlider('kA', () => params.kernelAlpha, (v) => (params.kernelAlpha = v));
+bindSlider('kF', () => params.kernelS, (v) => (params.kernelS = v));
+const lock = $<HTMLInputElement>('d-lock');
+const dS = bindSlider('dS', () => params.tSelf, (v) => { params.tSelf = v; if (lock.checked) { params.tNb = v; dN.value = String(v); $('dN-out').textContent = fmt(v); } });
+const dN = bindSlider('dN', () => params.tNb, (v) => { params.tNb = v; if (lock.checked) { params.tSelf = v; dS.value = String(v); $('dS-out').textContent = fmt(v); } });
+lock.addEventListener('change', () => { if (lock.checked) { params.tNb = params.tSelf; dN.value = String(params.tSelf); $('dN-out').textContent = fmt(params.tSelf); } refresh(); });
+$<HTMLSelectElement>('kernel').addEventListener('change', (e) => { params.kernel = (e.target as HTMLSelectElement).value as KernelType; refresh(); });
+$<HTMLInputElement>('d-kernel').addEventListener('change', (e) => { params.delayKernel = (e.target as HTMLInputElement).checked; refresh(); });
+$<HTMLInputElement>('d-lame').addEventListener('change', (e) => { params.delayLame = (e.target as HTMLInputElement).checked; refresh(); });
 refresh();
 $<HTMLInputElement>('selfprop').addEventListener('change', (e) => (params.selfProp = (e.target as HTMLInputElement).checked));
 const arrowsEl = $<HTMLInputElement>('arrows');
@@ -153,8 +175,10 @@ let last = performance.now(), fpsAvg = 60;
 function frame(now: number) {
   const dt = (now - last) / 1000; last = now; fpsAvg = 0.9 * fpsAvg + 0.1 / Math.max(dt, 1e-3);
   if (running) advance(spf);
-  render(); $('fps').textContent = `${fpsAvg.toFixed(0)} fps`;
+  render(); corrPanel.update(solver, (s) => s.polarOrder()); if (running && (solver.t * 60 | 0) % 30 === 0) refresh();
+  $('fps').textContent = `${fpsAvg.toFixed(0)} fps`;
   requestAnimationFrame(frame);
 }
 build(256);
 requestAnimationFrame(frame);
+(window as unknown as { app: unknown }).app = { get solver() { return solver; }, params, corr: corrPanel };
