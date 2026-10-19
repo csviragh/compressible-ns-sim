@@ -19,6 +19,21 @@ square (default 256 × 256, side 1, unit density):
 ∂u/∂t + (u·∇)u = μ∇²u + (λ+μ)∇(∇·u) − (1/τ)(|u| − v₀) u/|u| + f
 ```
 
+with, in addition, the long-range alignment term (default Cucker–Smale) and optional delays, below.
+
+### Long-range alignment and delays (ported from navier-stokes-sim)
+
+* Kernel term `S ∫K(|x−y|)(u(y) − u(x)) dy`, ∫K = 1 (min-image on the torus): Gaussian, **Cucker–Smale** `K ∝ (1 + r²/R²)^(−β)` (default, S = 2, R = 0.05, β = 1), power law `(r² + R²)^(−α/2)`, or fractional `−ν_s(−Δ)^s u`. Undelayed it is applied exactly in Fourier space, `û ← û·exp(S(K̂ − 1)Δt)`.
+* **Delays** t_self (own velocity) and t_nb (neighbours), default 0, with a *lock t_self = t_nb* checkbox (on by default). With delays the kernel term is
+  `S[(K*u)(x, t − t_nb) − u(x, t − t_self)]` (fractional: −ν_s[(λ^s − G₀)*u(t − t_nb) + G₀u(t − t_self)], G₀ = mean symbol). Explicit; with t_self = 0 the own part is implicit.
+* Past fields are read **Eulerian** (at the fixed grid point) from a ring buffer of past velocity fields (same `FieldHistory` as navier-stokes-sim), linearly interpolated in time and read at the step midpoint.
+* The **Lamé operator is undelayed by default**. An optional checkbox applies the delays to it too: the diagonal (self) part D of the discrete operator acts on u(t − t_self), the remainder on u(t − t_nb), explicit. In navier-stokes-sim the delayed local viscosity has a grid-scale checkerboard instability, so this is marked ⚠.
+* Advection, self-propulsion and density transport are never delayed.
+
+### Order parameter / correlations
+
+Same panel as navier-stokes-sim: histogram of P(cos θ_ij) over pairs of cell directions (30 000 sampled pairs), exact ⟨cos θ_ij⟩ = (|Σv̂|² − N)/(N(N−1)), radial correlation C(r) (full and connected) with correlation length ξ (first zero of C_conn), and a 20 s time trace of ⟨cos θ⟩, φ and ξ.
+
 ### Passive density
 
 A density field ρ (initially 1, reset by the init buttons) is carried by the continuity equation
@@ -71,6 +86,7 @@ decays at (λ+2μ)k² and is carried/steepened by advection.
   generators as navier-stokes-sim.
 * Views: density ρ (diverging map centred at 1, auto or fixed ± range), velocity direction (hue, brightness = speed), speed, vorticity, divergence, dye.
 * **Velocity-arrow overlay** (toggle, spacing and scale sliders).
+* Kernel selector with S, R, β, α, s; delay sliders t_self, t_nb, lock, apply-to-kernel / apply-to-Lamé ⚠; correlation panel.
 * Sliders: μ (log), λ, self-propulsion on/off, τ, v₀, grid (64/128/256), steps per frame.
 * HUD: grid, t, Δt, kinetic energy, ⟨|u|⟩, polar order |⟨u/|u|⟩|, rms ∇·u, total mass, min/max ρ.
 * URL parameter `?view=density` (or speed, vorticity, divergence, direction, dye) picks the start view.
@@ -82,6 +98,8 @@ decays at (λ+2μ)k² and is carried/steepened by advection.
 * self-propulsion drives ⟨|u|⟩ → v₀; exact relaxation of a uniform flow
 * periodicity: a uniformly advected pattern wraps around the torus unchanged; viscosity conserves mean momentum
 * ∇·u ≠ 0 is retained; λ clamping
+* delay buffer reproduces a known shifted history; zero delays give bit-identical undelayed dynamics; a tiny delay ≈ undelayed; S·t = 4 destabilises
+* correlations: aligned field gives ⟨cos⟩ = 1 and C(r) = 1; ordered + perturbation start gives ⟨cos⟩ ≈ 0.95
 * density: mass conserved to 1e-12 in a compressive flow with ρ ≥ 0; uniform flow translates ρ around the torus (max error < 1 %)
 
 ## Development
