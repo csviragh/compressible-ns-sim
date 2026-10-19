@@ -66,9 +66,9 @@ describe('compressible-velocity Lamé fluid', () => {
   });
 
   it('density: mass conserved to round-off in a compressive active flow, ρ stays ≥ 0', () => {
-    const s = new Solver(48, { ...defaultParams(), mu: 1e-4, lambda: 0 });
+    const s = new Solver(64, { ...defaultParams(), mu: 1e-4, lambda: 0 });
     s.seedRandom(5, 0.3);
-    for (let i = 0; i < 48 * 48; i++) s.u[i] += 0.3 * Math.sin(k * ((i % 48) + 0.5) / 48); // add compression
+    for (let i = 0; i < 64 * 64; i++) s.u[i] += 0.3 * Math.sin(k * ((i % 64) + 0.5) / 64); // add compression
     const m0 = s.totalMass();
     for (let m = 0; m < 120; m++) s.step();
     expect(s.floorHits).toBe(0);
