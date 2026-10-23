@@ -62,6 +62,7 @@
       <section>
         <h2>Lamé viscosity</h2>
         <p class="hint mono">μ∇²u + (λ+μ)∇(∇·u) = ∇·[μ(∇u+∇uᵀ) + λ(∇·u)I]</p>
+        <label class="check"><input type="checkbox" id="lame-on" checked /> Enable Lamé viscous term ∇·σ</label>
         <label class="slider">Shear viscosity μ <output id="mu-out"></output>
           <input type="range" id="mu" min="-6" max="-1.5" step="0.05" />
         </label>
@@ -81,19 +82,25 @@
         </label>
       </section>
       <section>
-        <h2>Delayed Lamé operator (self vs neighbours)</h2>
-        <label class="slider" title="How old the point's OWN velocity is when it reacts">Own-velocity delay t<sub>self</sub> <output id="dS-out"></output>
-          <input type="range" id="dS" min="0" max="2" step="0.01" />
+        <h2>Pairwise repulsion (retarded)</h2>
+        <p class="hint mono">f(x,t) = A Σ<sub>y</sub> ρ(y, t − |x−y|/v<sub>int</sub>) S(|x−y|) ê<sub>y→x</sub> h²</p>
+        <label class="check"><input type="checkbox" id="rep-on" /> Enable repulsion</label>
+        <label class="slider">Strength A <output id="repA-out"></output>
+          <input type="range" id="repA" min="0" max="5" step="0.01" />
         </label>
-        <label class="slider" title="How old the NEIGHBOURS' velocities are when they arrive">Neighbour delay t<sub>nb</sub> <output id="dN-out"></output>
-          <input type="range" id="dN" min="0" max="2" step="0.01" />
+        <label class="slider">Range R<sub>0</sub> <output id="R0-out"></output>
+          <input type="range" id="R0" min="0.005" max="0.15" step="0.001" />
         </label>
-        <label class="check"><input type="checkbox" id="d-lock" checked /> Lock t<sub>self</sub> = t<sub>nb</sub></label>
-        <p class="hint mono" id="d-info"></p>
-        <p class="hint">Eulerian read: the past field is taken at the fixed grid point x (ring buffer of past
-          velocity fields, linear interpolation in time). Discrete L = D + N: the cell's own stencil weight
-          D = −(4μ + 2(λ+μ))/h² acts on <b>u</b>(x, t − t<sub>self</sub>), all neighbour weights on <b>u</b>(·, t − t<sub>nb</sub>).
-          Explicit, sub-stepped for Δt·(8μ + 5|λ+μ|)/h² ≤ 1.8.</p>
+        <label class="slider" title="0 = Heaviside step at R0; R0 = nearly linear">Smoothing r <output id="rS-out"></output>
+          <input type="range" id="rS" min="0" max="1" step="0.01" />
+        </label>
+        <label class="slider" title="log10 v_int; rightmost = ∞ (instantaneous)">Interaction speed v<sub>int</sub> <output id="vInt-out"></output>
+          <input type="range" id="vInt" min="-2" max="2" step="0.05" />
+        </label>
+        <p class="hint mono" id="rep-info"></p>
+        <p class="hint">S(d) = 1 for d ≤ R<sub>0</sub> − r, 0 for d ≥ R<sub>0</sub>, normalised tanh sigmoid in between
+          (r = 0: Heaviside, r = R<sub>0</sub>: ≈ linear). The r slider is a fraction of R<sub>0</sub>. Only the repulsion is
+          retarded (Eulerian ring buffer of past ρ); the Lamé term and the fluid stay instantaneous and compressible.</p>
       </section>
       <details id="corr-panel" class="panel-details" open>
         <summary><h2>Order parameter / correlations</h2></summary>

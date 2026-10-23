@@ -1,8 +1,8 @@
 /**
- * Ring buffer of past velocity fields for the delayed viscosity terms.
+ * Ring buffer of past fields for the retarded repulsion (the solver stores the
+ * density ρ in the `u` slot and leaves `v` empty).
  *
- * Every frame holds the full staggered u and v arrays (ghost layers included,
- * Float32, exactly as the solver stores them), time-stamped with simulation
+ * Every frame holds Float32 copies of the arrays, time-stamped with simulation
  * time. Frames are recorded at most every `interval` seconds (= Δt unless the
  * memory budget forces coarser sampling) and kept only as long as the longest
  * delay τ_max needs them. Reads interpolate linearly in time; a read before

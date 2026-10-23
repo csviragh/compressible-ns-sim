@@ -30,7 +30,7 @@ function build(n: number) {
   canvas.width = n; canvas.height = n; img = ctx.createImageData(n, n); init();
 }
 
-const fmt = (x: number) => (x === 0 ? '0' : Math.abs(x) < 1e-2 || Math.abs(x) >= 1e3 ? x.toExponential(2) : x.toPrecision(3));
+const fmt = (x: number) => (!Number.isFinite(x) ? '∞' : x === 0 ? '0' : Math.abs(x) < 1e-2 || Math.abs(x) >= 1e3 ? x.toExponential(2) : x.toPrecision(3));
 function bindSlider(id: string, get: () => number, set: (v: number) => void, to = (v: number) => v, from = (v: number) => v) {
   const el = $<HTMLInputElement>(id), out = $<HTMLOutputElement>(id + '-out');
   el.value = String(to(get())); out.textContent = fmt(get());
@@ -49,20 +49,21 @@ function refresh() {
   lamEl.value = String(params.lambda); $('lambda-out').textContent = fmt(params.lambda);
   $('zeta').innerHTML = `λ + 2μ = ${fmt(longitudinalViscosity(params))} (compressive) · ζ = λ + μ = ${fmt(bulkViscosity(params))}` +
     (clamped ? '<br><span class="warn">λ clamped to −2μ: λ + 2μ < 0 is ill-posed (anti-diffusion)</span>' : '');
-  const di = document.getElementById('d-info');
-  if (di) {
-    // equal-delay checkerboard criterion: Λ_cb·t > π/2 with Λ_cb = 8μ/h² (shear) or (8μ + 4(λ+μ))/h² (compressive)
-    const h = solver ? solver.h : 1 / 256, t = Math.max(params.tSelf, params.tNb);
-    const Lcb = Math.max(8 * params.mu, 8 * params.mu + 4 * (params.lambda + params.mu)) / (h * h), x = Lcb * t;
-    di.innerHTML = `delays act on the Lamé operator: self part at t − t_self, neighbour part at t − t_nb` +
-      `<br>Λ_cb·t = ${x.toFixed(2)}${x > Math.PI / 2 ? ' <span class="warn">(> π/2: grid-scale checkerboard unstable)</span>' : ''}` +
-      (solver ? ` · ${solver.lastSubsteps} sub-step(s) · history ${solver.history.frames.length} frames` : '');
+  const ri = document.getElementById('rep-info');
+  if (ri) {
+    const tm = Number.isFinite(params.vInt) ? params.R0 / params.vInt : 0;
+    ri.innerHTML = `r = ${fmt(params.rSmooth)} · max retardation R₀/v_int = ${fmt(tm)} s` +
+      (solver ? ` · ${solver.repulsionStencil().length} kernel cells · ρ history ${solver.history.frames.length} frames · ${solver.lastSubsteps} Lamé sub-step(s)` : '');
   }
 }
-const lock = $<HTMLInputElement>('d-lock');
-const dS = bindSlider('dS', () => params.tSelf, (v) => { params.tSelf = v; if (lock.checked) { params.tNb = v; dN.value = String(v); $('dN-out').textContent = fmt(v); } refresh(); });
-const dN = bindSlider('dN', () => params.tNb, (v) => { params.tNb = v; if (lock.checked) { params.tSelf = v; dS.value = String(v); $('dS-out').textContent = fmt(v); } });
-lock.addEventListener('change', () => { if (lock.checked) { params.tNb = params.tSelf; dN.value = String(params.tSelf); $('dN-out').textContent = fmt(params.tSelf); } refresh(); });
+let rFrac = params.rSmooth / params.R0;
+bindSlider('repA', () => params.repA, (v) => (params.repA = v));
+bindSlider('R0', () => params.R0, (v) => { params.R0 = v; params.rSmooth = rFrac * v; });
+bindSlider('rS', () => rFrac, (v) => { rFrac = v; params.rSmooth = v * params.R0; });
+const VMAX = 2; // log10 slider max → ∞
+bindSlider('vInt', () => params.vInt, (v) => (params.vInt = v >= VMAX ? Infinity : 10 ** v), (x) => (Number.isFinite(x) ? Math.log10(x) : VMAX));
+$<HTMLInputElement>('rep-on').addEventListener('change', (e) => { params.repOn = (e.target as HTMLInputElement).checked; refresh(); });
+$<HTMLInputElement>('lame-on').addEventListener('change', (e) => { params.lameOn = (e.target as HTMLInputElement).checked; refresh(); });
 refresh();
 $<HTMLInputElement>('selfprop').addEventListener('change', (e) => (params.selfProp = (e.target as HTMLInputElement).checked));
 const arrowsEl = $<HTMLInputElement>('arrows');
