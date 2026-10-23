@@ -9,12 +9,14 @@
  * longitudinal (compressive, k∥u) part at (λ+2μ)k². Stability/ellipticity needs μ ≥ 0 and
  * λ + 2μ ≥ 0 (λ is clamped).
  *
- * Delays: the discrete Lamé operator L = D + N is split into its self part D (the cell's own,
- * diagonal stencil coefficient, D = −(4μ + 2(λ+μ))/h² for both components) and its neighbour
- * part N = L − D. The model is  L_delayed[u](x,t) = D·u(x, t − t_self) + N[u(·, t − t_nb)](x),
- * Eulerian (fixed grid point) read from a ring buffer. t_self = t_nb = 0 gives L exactly.
+ * Lamé switch: `lameOn = false` drops the whole viscous term ∇·σ (μ and λ); λ is the second
+ * (Lamé) coefficient, so the compressive part (λ+μ)∇(∇·u) is fully active when λ ≠ −μ.
  *
- * Step (operator splitting): forces → explicit (forward-Euler, sub-stepped) delayed Lamé step →
+ * Pairwise repulsion (retarded): every cell is a fluid element of mass ρh². A source at y acts on x with
+ *   f_rep(x,t) = A Σ_y ρ(y, t − |x−y|/v_int) S(|x−y|) (x−y)/|x−y| h²,
+ * S = smoothed step of range R₀ and width r (see `repulsionProfile`). Only the repulsion is retarded.
+ *
+ * Step (operator splitting): forces + retarded repulsion → explicit (forward-Euler, sub-stepped) Lamé step →
  * semi-Lagrangian advection (bilinear, periodic) → exact self-propulsion relaxation.
  */
 import { FieldHistory } from './delay';
@@ -27,13 +29,29 @@ export interface Params {
   v0: number;       // target speed v₀
   dt: number;       // time step (s)
   dyeFade: number;  // 1/s
-  /** Delays (s) of the Lamé operator: self (cell-own, diagonal) part reads u(t − t_self), neighbour part u(t − t_nb). */
-  tSelf: number; tNb: number;
+  /** Lamé viscous operator ∇·σ on/off. */
+  lameOn: boolean;
+  /** Pairwise repulsion: on/off, strength A, range R₀, smoothing width r (0 = Heaviside), propagation speed v_int (Infinity = instantaneous). */
+  repOn: boolean; repA: number; R0: number; rSmooth: number; vInt: number;
+}
+
+/**
+ * Repulsion profile S(d) on [0, R₀]: 1 for d ≤ R₀ − r, 0 for d ≥ R₀, and in between a normalised
+ * tanh sigmoid centred at c = R₀ − r/2:  S = ½[1 − tanh(β x)/tanh β],  x = (d − c)/(r/2) ∈ [−1, 1], β = 1.
+ * r = 0 → Heaviside H(R₀ − d); r = R₀ → close to linear 1 − d/R₀ (max deviation ≈ 0.06). r is clamped to [0, R₀].
+ */
+export const SIGMOID_BETA = 1;
+export function repulsionProfile(d: number, R0: number, r: number): number {
+  if (!(R0 > 0) || d >= R0) return 0;
+  r = Math.min(Math.max(r, 0), R0);
+  if (d <= R0 - r) return 1;
+  const x = (d - (R0 - r / 2)) / (r / 2);
+  return 0.5 * (1 - Math.tanh(SIGMOID_BETA * x) / Math.tanh(SIGMOID_BETA));
 }
 
 export const defaultParams = (): Params => ({
   mu: 1e-4, lambda: 0, selfProp: true, tau: 0.5, v0: 0.5, dt: 1 / 60, dyeFade: 0,
-  tSelf: 0, tNb: 0,
+  lameOn: true, repOn: false, repA: 0.5, R0: 0.04, rSmooth: 0.02, vInt: Infinity,
 });
 
 /** Longitudinal (compressive) viscosity λ + 2μ. */
@@ -64,7 +82,7 @@ export class Solver {
   fx: Float64Array; fy: Float64Array;
   private tmp: Float64Array; private tmp2: Float64Array;
   readonly history = new FieldHistory();
-  private du: Float64Array; private dv: Float64Array; private su: Float64Array; private sv: Float64Array;
+  private su: Float64Array; private sv: Float64Array;
   private lx: Float64Array; private ly: Float64Array;
   /** Number of explicit Lamé sub-steps used in the last step. */
   lastSubsteps = 1;
@@ -74,13 +92,10 @@ export class Solver {
     const N = n * n, A = () => new Float64Array(N);
     this.u = A(); this.v = A(); this.dye = A(); this.rho = A().fill(1); this.r1 = A(); this.dr = A(); this.fx = A(); this.fy = A();
     this.tmp = A(); this.tmp2 = A();
-    this.du = A(); this.dv = A(); this.su = A(); this.sv = A(); this.lx = A(); this.ly = A();
+    this.su = A(); this.sv = A(); this.lx = A(); this.ly = A();
   }
 
   reset() { this.u.fill(0); this.v.fill(0); this.dye.fill(0); this.fx.fill(0); this.fy.fill(0); this.rho.fill(1); this.floorHits = 0; this.t = 0; this.history.clear(); }
-
-  /** Self (diagonal) coefficient of the discrete Lamé stencil, the same for both components. */
-  selfCoeff(): number { const { mu, lambda } = this.params; return -(4 * mu + 2 * (lambda + mu)) / (this.h * this.h); }
 
   /**
    * Upper bound of the spectral radius of −L (Gershgorin): Λ = (8μ + 5|λ+μ|)/h².
@@ -88,30 +103,7 @@ export class Solver {
    */
   spectralBound(): number { const { mu, lambda } = this.params; return (8 * mu + 5 * Math.abs(lambda + mu)) / (this.h * this.h); }
 
-  /**
-   * Discrete Lamé operator, split: out = D·(su, sv) + N[(nu, nv)], N = L − D.
-   * Stencil (periodic, collocated): μ·5-point Laplacian + (λ+μ)[∂xx u + ∂xy v, ∂xy u + ∂yy v],
-   * ∂xx 3-point, ∂xy 4-corner centred. With s = n the result is exactly L[u].
-   */
-  lameSplit(su: Float64Array, sv: Float64Array, nu: Float64Array, nv: Float64Array, ox: Float64Array, oy: Float64Array) {
-    const { n, h } = this, { mu, lambda } = this.params, b = lambda + mu, ih2 = 1 / (h * h), D = this.selfCoeff();
-    for (let j = 0; j < n; j++) {
-      const jm = ((j - 1 + n) % n) * n, jp = ((j + 1) % n) * n, jj = j * n;
-      for (let i = 0; i < n; i++) {
-        const im = (i - 1 + n) % n, ip = (i + 1) % n, k = jj + i;
-        const uE = nu[jj + ip], uW = nu[jj + im], uN = nu[jp + i], uS = nu[jm + i];
-        const vE = nv[jj + ip], vW = nv[jj + im], vN = nv[jp + i], vS = nv[jm + i];
-        const cxyV = (nv[jp + ip] - nv[jp + im] - nv[jm + ip] + nv[jm + im]) * 0.25;
-        const cxyU = (nu[jp + ip] - nu[jp + im] - nu[jm + ip] + nu[jm + im]) * 0.25;
-        // neighbour part (all off-centre stencil entries)
-        const nx = (mu * (uE + uW + uN + uS) + b * (uE + uW) + b * cxyV) * ih2;
-        const ny = (mu * (vE + vW + vN + vS) + b * (vN + vS) + b * cxyU) * ih2;
-        ox[k] = nx + D * su[k]; oy[k] = ny + D * sv[k];
-      }
-    }
-  }
-
-  /** Undelayed discrete Lamé operator L[u] (independent single-stencil form, used by tests). */
+  /** Discrete Lamé operator L[u] (periodic, collocated: μ·5-point Laplacian + (λ+μ)[∂xx u + ∂xy v, ∂xy u + ∂yy v]). */
   lame(u: Float64Array, v: Float64Array, ox: Float64Array, oy: Float64Array) {
     const { n, h } = this, { mu, lambda } = this.params, b = lambda + mu, ih2 = 1 / (h * h);
     for (let j = 0; j < n; j++) {
@@ -129,23 +121,62 @@ export class Solver {
   }
 
   /**
-   * Delayed Lamé step over dt, forward Euler with ns = ceil(dt·Λ/1.8) sub-steps (Λ = spectralBound()).
-   * Sub-step m at time t_m reads the self field at t_m − t_self and the neighbour field at
-   * t_m − t_nb (history frames + the current sub-step field as the newest point).
+   * Lamé step over dt, forward Euler with ns = ceil(dt·Λ/1.8) sub-steps (Λ = spectralBound()).
    */
   viscous(dt: number) {
-    const { mu, lambda, tSelf, tNb } = this.params;
-    if (mu === 0 && lambda === 0) { this.lastSubsteps = 0; return; }
+    const { mu, lambda, lameOn } = this.params;
+    if (!lameOn || (mu === 0 && lambda === 0)) { this.lastSubsteps = 0; return; }
     const ns = Math.max(1, Math.ceil(dt * this.spectralBound() / 1.8)), d = dt / ns;
     this.lastSubsteps = ns;
-    const { u, v, du, dv, su, sv, lx, ly } = this, N = u.length;
+    const { u, v, lx, ly } = this, N = u.length;
     for (let m = 0; m < ns; m++) {
-      const tm = this.t + m * d;
-      let S0u: Float64Array = u, S0v: Float64Array = v, N0u: Float64Array = u, N0v: Float64Array = v;
-      if (tSelf > 0) { this.history.read(tm - tSelf, tm, u, v, su, sv); S0u = su; S0v = sv; }
-      if (tNb > 0) { this.history.read(tm - tNb, tm, u, v, du, dv); N0u = du; N0v = dv; }
-      this.lameSplit(S0u, S0v, N0u, N0v, lx, ly);
+      this.lame(u, v, lx, ly);
       for (let k = 0; k < N; k++) { u[k] += d * lx[k]; v[k] += d * ly[k]; }
+    }
+  }
+
+  /** Stencil of the repulsion kernel: grid offsets with 0 < d < R₀, weight A·S(d)·h²·ê and retardation d/v_int. */
+  repulsionStencil(): { di: number; dj: number; wx: number; wy: number; delay: number }[] {
+    const { n, h } = this, { repA, R0, rSmooth, vInt } = this.params, m = Math.min(Math.floor(n / 2) - 1, Math.ceil(R0 / h));
+    const out: { di: number; dj: number; wx: number; wy: number; delay: number }[] = [];
+    for (let dj = -m; dj <= m; dj++) for (let di = -m; di <= m; di++) {
+      if (!di && !dj) continue;
+      const d = h * Math.hypot(di, dj), S = repulsionProfile(d, R0, rSmooth);
+      if (S <= 0) continue;
+      const w = repA * S * h * h / d; // × (x − y) = −(di, dj)·h gives A S h² ê
+      out.push({ di, dj, wx: -w * di * h, wy: -w * dj * h, delay: vInt > 0 && Number.isFinite(vInt) ? d / vInt : 0 });
+    }
+    return out;
+  }
+
+  /** Longest retardation the density history must cover (0 = instantaneous or off). */
+  delayMax(): number {
+    const { repOn, R0, vInt } = this.params;
+    return repOn && R0 > 0 && vInt > 0 && Number.isFinite(vInt) ? R0 / vInt : 0;
+  }
+
+  /**
+   * Retarded repulsion acceleration into (ox, oy): source cell y = x + (di, dj)h contributes with its
+   * density at t − d/v_int (history lookup, linear in time; the current ρ is the newest point).
+   */
+  repulsion(ox: Float64Array, oy: Float64Array) {
+    ox.fill(0); oy.fill(0);
+    const { n, rho, history } = this;
+    for (const s of this.repulsionStencil()) {
+      let src: ArrayLike<number> = rho;
+      if (s.delay > 0) {
+        const l = history.lookup(this.t - s.delay, this.t);
+        if (l.a >= 0 && l.theta === 0) src = history.frames[l.a].u;
+        else if (l.a >= 0 || l.b >= 0) {
+          const fa = l.a < 0 ? rho : history.frames[l.a].u, fb = l.b < 0 ? rho : history.frames[l.b].u, t = this.tmp;
+          for (let k = 0; k < t.length; k++) t[k] = (1 - l.theta) * fa[k] + l.theta * fb[k];
+          src = t;
+        }
+      }
+      for (let j = 0; j < n; j++) {
+        const sj = ((j + s.dj + n) % n) * n, jj = j * n;
+        for (let i = 0; i < n; i++) { const r = src[sj + (i + s.di + n) % n]; ox[jj + i] += s.wx * r; oy[jj + i] += s.wy * r; }
+      }
     }
   }
 
@@ -214,19 +245,20 @@ export class Solver {
     }
   }
 
-  /** Longest delay the history must cover (0 = nothing delayed). */
-  delayMax(): number { return Math.max(this.params.tSelf, this.params.tNb, 0); }
-
   step(dt = this.params.dt) {
     clampParams(this.params);
     const N = this.u.length, tauMax = this.delayMax();
     if (tauMax > 0) {
       const h = this.history;
-      h.configure(N, N, dt, tauMax + dt, 256 * 2 ** 20);
-      if (h.wants(this.t)) h.push(this.t, this.u, this.v);
+      h.configure(N, 0, dt, tauMax + dt, 256 * 2 ** 20);
+      if (h.wants(this.t)) h.push(this.t, this.rho, this.rho.subarray(0, 0));
       h.prune(this.t + dt);
     } else if (this.history.frames.length) this.history.clear();
     for (let k = 0; k < N; k++) { this.u[k] += dt * this.fx[k]; this.v[k] += dt * this.fy[k]; }
+    if (this.params.repOn && this.params.repA !== 0) {
+      this.repulsion(this.su, this.sv);
+      for (let k = 0; k < N; k++) { this.u[k] += dt * this.su[k]; this.v[k] += dt * this.sv[k]; }
+    }
     this.viscous(dt);
     this.advectDensity(dt);
     this.advect(dt);

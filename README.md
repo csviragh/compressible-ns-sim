@@ -16,39 +16,45 @@ without any equation of state**: the velocity is free to compress (∇·u ≠ 0)
 square (default 256 × 256, side 1, unit density):
 
 ```
-∂u/∂t + (u·∇)u = μ∇²u + (λ+μ)∇(∇·u) − (1/τ)(|u| − v₀) u/|u| + f
+∂u/∂t + (u·∇)u = χ_L [μ∇²u + (λ+μ)∇(∇·u)] + f_rep − (1/τ)(|u| − v₀) u/|u| + f
 ```
 
-where the Lamé operator is **delayed** (below). There is no Cucker–Smale or other nonlocal alignment
-kernel in this model: the only coupling between neighbouring points is the (delayed) Lamé operator.
+χ_L ∈ {0, 1} is the **Lamé switch** (UI checkbox "Enable Lamé viscous term"; off drops μ and λ together),
+and f_rep is a **retarded pairwise repulsion** (below). Neither term adds a pressure projection, so the
+velocity stays compressible. There are no global/uniform delays any more: the only retardation is the
+distance-dependent one of the repulsion.
 
-### Delayed Lamé operator (the model)
+### Pairwise repulsion with retarded potential
 
-The discrete Lamé operator (periodic, collocated: μ × 5-point Laplacian, (λ+μ)[∂xx u + ∂xy v, ∂xy u + ∂yy v]
-with 3-point ∂xx and 4-corner ∂xy) is split as L = D + N:
-
-* **self part** D: the cell's own stencil weight, `D = −(4μ + 2(λ+μ))/h²` (same for both components);
-* **neighbour part** N = L − D: all off-centre stencil weights.
-
-The model uses
+Each grid cell is a fluid element of mass ρh². The source cell y pushes cell x away with
 
 ```
-L_delayed[u](x, t) = D·u(x, t − t_self) + N[u(·, t − t_nb)](x)
+f_rep(x, t) = A Σ_{y ≠ x, |x−y| < R₀} ρ(y, t − |x−y|/v_int) · S(|x−y|) · (x − y)/|x − y| · h²
 ```
 
-* t_self, t_nb ∈ [0, 2] s, default 0, with a **lock t_self = t_nb** checkbox (on by default).
-* Past fields are read **Eulerian**, at the fixed grid point, from a ring buffer of past velocity fields
-  (`FieldHistory`, one frame per Δt, linear interpolation in time; the current sub-step field is the newest point).
-* With t_self = t_nb = 0 it is exactly the undelayed operator L (tested).
-* Advection, self-propulsion and density transport are not delayed.
+(acceleration of x; i.e. pair force ∝ ρ(x)ρ(y), divided by the mass of x). Periodic minimum-image
+offsets; uniform ρ gives zero net force.
 
-**Delay-driven checkerboard instability (physics of the delayed model, not a bug).** For equal delays t
-the grid-scale checkerboard mode (k = (π/h, π/h)) obeys `â' = −Λ_cb â(t − t)` with Λ_cb = 8μ/h²
-(transverse) or (8μ + 4(λ+μ))/h² (compressive). This delay equation is unstable for **Λ_cb·t > π/2**,
-the same criterion as the delayed local viscosity in navier-stokes-sim (8νt/h² = π/2). At the default
-μ = 1e-4, λ = 0 on 256², Λ_cb ≈ 52 /s (shear) and 79 /s (compressive), so already t ≳ 0.02 s destabilises the grid scale; smaller μ or a
-coarser grid moves the threshold up (t_c ∝ h²/μ). Unequal delays give a two-delay characteristic equation
-μ = D e^{−μ t_self} + N̂(k) e^{−μ t_nb}. No hidden regularisation is added; the panel shows Λ_cb·t and warns above π/2.
+**Profile S(d)** (range R₀, smoothing width r ∈ [0, R₀]):
+
+```
+S(d) = 1                                   d ≤ R₀ − r
+S(d) = ½ [1 − tanh(β x) / tanh β],  x = (d − (R₀ − r/2)) / (r/2) ∈ [−1, 1],  β = 1
+S(d) = 0                                   d ≥ R₀
+```
+
+* r = 0: Heaviside H(R₀ − d) (full repulsion inside R₀, none outside);
+* increasing r widens the smooth shoulder ending exactly at R₀ (compact support);
+* r = R₀: close to linear 1 − d/R₀ (max deviation ≈ 0.06, tested).
+
+**Retardation:** the interaction propagates at v_int, so the source density is read at
+t − d/v_int (Eulerian, at the fixed source cell) from a ring buffer of past ρ fields (`FieldHistory`,
+one frame per Δt, linear interpolation in time, current ρ = newest point). v_int = ∞ (slider at the right
+end) is instantaneous and keeps no history. Only the repulsion is retarded; Lamé, advection,
+self-propulsion and density transport use the present state.
+
+UI: enable, strength A, R₀, r (as a fraction of R₀), v_int (log slider, rightmost = ∞).
+Cost is O(N·(R₀/h)²) per step (direct sum, about 300 offsets at the defaults on 256²).
 
 ### Order parameter / correlations
 
@@ -89,13 +95,14 @@ Identical to navier-stokes-sim: −(1/τ)(|u| − v₀) u/|u|, integrated exactl
 Operator splitting per step (Δt = 1/60 s):
 
 1. forces (mouse drag);
-2. **delayed Lamé step, explicit forward Euler**, sub-stepped: ns = ceil(Δt·Λ/1.8) with the Gershgorin
+2. retarded repulsion kick u += Δt·f_rep (computed from ρ at the start of the step and its history);
+3. **Lamé step (if enabled), explicit forward Euler**, sub-stepped: ns = ceil(Δt·Λ/1.8) with the Gershgorin
    bound Λ = (8μ + 5|λ+μ|)/h² of the spectrum of −L, so Δt_sub·Λ ≤ 1.8 < 2 (forward-Euler limit for the
    undelayed operator; e.g. μ = 1e-4, λ = 0, 256²: Λ ≈ 85 /s, Δt_sub ≤ 0.024 s, 1 sub-step at Δt = 1/60).
-   Each sub-step reads its delayed fields at its own time. Conserves the mean momentum. (The exact
-   Fourier step of earlier versions cannot carry the delay and was removed.)
-3. **semi-Lagrangian advection** of u and the dye (midpoint back-trace, bilinear, periodic);
-4. exact self-propulsion relaxation.
+   Conserves the mean momentum.
+4. continuity step for ρ;
+5. **semi-Lagrangian advection** of u and the dye (midpoint back-trace, bilinear, periodic);
+6. exact self-propulsion relaxation.
 
 There is no pressure solve, so compression waves are not sound waves: a compressive mode only
 decays at (λ+2μ)k² and is carried/steepened by advection.
@@ -108,7 +115,7 @@ decays at (λ+2μ)k² and is carried/steepened by advection.
   generators as navier-stokes-sim.
 * Views: density ρ (diverging map centred at 1, auto or fixed ± range), velocity direction (hue, brightness = speed), speed, vorticity, divergence, dye.
 * **Velocity-arrow overlay** (toggle, spacing and scale sliders).
-* Delay sliders t_self, t_nb (0–2 s) with lock t_self = t_nb; info line with Λ_cb·t and the sub-step count; correlation panel.
+* Lamé on/off checkbox; repulsion panel (on/off, A, R₀, r, v_int) with an info line (max retardation R₀/v_int, kernel size, history frames, Lamé sub-steps); correlation panel.
 * Sliders: μ (log), λ, self-propulsion on/off, τ, v₀, grid (64/128/256), steps per frame.
 * HUD: grid, t, Δt, kinetic energy, ⟨|u|⟩, polar order |⟨u/|u|⟩|, rms ∇·u, total mass, min/max ρ.
 * URL parameter `?view=density` (or speed, vorticity, divergence, direction, dye) picks the start view.
@@ -116,11 +123,14 @@ decays at (λ+2μ)k² and is carried/steepened by advection.
 
 ## Tests (`npm test`)
 
-* zero delay: shear wave decays at μk² (±1 %), longitudinal wave at (λ+2μ)k² (±1 %) for λ = 0, 3μ, −1.5μ
+* shear wave decays at μk² (±1 %), longitudinal wave at (λ+2μ)k² (±1 %) for λ = 0, 3μ, −1.5μ
 * self-propulsion drives ⟨|u|⟩ → v₀; exact relaxation of a uniform flow
 * periodicity: a uniformly advected pattern wraps around the torus unchanged; viscosity conserves mean momentum
 * ∇·u ≠ 0 is retained; λ clamping
-* delay buffer reproduces a known shifted history; split operator D·u + N[u] equals the undelayed L to 1e-13; zero delays = forward Euler with L, no history kept; equal-delay checkerboard decays at Λt = 0.82 and grows at Λt = 3.3
+* delay buffer reproduces a known shifted history; lookup returns the present for T ≥ now, clamps before the oldest frame and interpolates in between
+* sigmoid: r = 0 is exactly Heaviside; tiny r is a sharp step centred at R₀ − r/2; r = R₀ is monotone and within 0.07 of linear
+* repulsion: zero force for uniform ρ, outward push around a density bump; retarded signal arrives at distance d after d/v_int (± 2Δt); v_int = ∞ is instantaneous
+* Lamé switch off leaves u untouched by viscosity
 * correlations: aligned field gives ⟨cos⟩ = 1 and C(r) = 1; ordered + perturbation start gives ⟨cos⟩ ≈ 0.95
 * density: mass conserved to 1e-12 in a compressive flow with ρ ≥ 0; uniform flow translates ρ around the torus (max error < 1 %)
 
