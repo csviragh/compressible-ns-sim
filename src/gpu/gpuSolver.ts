@@ -14,6 +14,8 @@
 import { Solver } from '../solver/solver';
 import { FieldHistory } from '../solver/delay';
 import code from './shaders.wgsl?raw';
+import coulombCode from './coulomb.wgsl?raw';
+import { coulombKernel } from '../solver/coulomb';
 
 const CUR = 0xffffffff;
 const WG = 8;
@@ -21,6 +23,8 @@ const ENTRY_BYTES = 32;
 const MAX_STEPS = 16;   // steps per advance() call
 const MAX_LAME = 64;    // Lamé sub-steps per step (uniform slots)
 const NS_MAX_CAP = 64;  // density sub-steps per step
+const C_CHUNK = 4096;   // Coulomb offsets per dispatch (keeps single dispatches short, avoids GPU watchdog resets)
+const C_MAX_CHUNKS = 64; // → grids up to 512²
 
 type Frame = FieldHistory['frames'][number];
 
@@ -40,6 +44,14 @@ export class GpuSolver {
   clampedNs = 0;
   floorHits = 0;
   lastGpuMs = 0;
+  // --- Coulomb direct sum ---
+  private cPipe!: GPUComputePipeline;
+  private cLayout!: GPUBindGroupLayout;
+  private cBufs: { CP: GPUBuffer; K: GPUBuffer; bins: GPUBuffer } | null = null;
+  private cBind: GPUBindGroup | null = null;
+  private cKey = '';
+  private cBinBlock = 256;
+  private cBindKey: unknown[] = [];
   adapterInfo = '';
 
   static async create(): Promise<GpuSolver | null> {
@@ -71,6 +83,13 @@ export class GpuSolver {
     });
     const module = d.createShaderModule({ code });
     const pl = d.createPipelineLayout({ bindGroupLayouts: [this.layout] });
+    this.cLayout = d.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: C, buffer: { type: 'uniform', hasDynamicOffset: true } },
+        st(1), st(2, true), st(3, true), st(4, true), st(5, true, true),
+      ],
+    });
+    this.cPipe = d.createComputePipeline({ layout: d.createPipelineLayout({ bindGroupLayouts: [this.cLayout] }), compute: { module: d.createShaderModule({ code: coulombCode }), entryPoint: 'coulomb' } });
     for (const e of ['repulse', 'lame', 'umax', 'dens1', 'dens2', 'dens3', 'advect'])
       this.pipes[e] = d.createComputePipeline({ layout: pl, compute: { module, entryPoint: e } });
   }
@@ -103,6 +122,39 @@ export class GpuSolver {
       layout: this.layout,
       entries: [e(0, b.P), e(1, b.S, 16), e(2, b.U), e(3, b.U2), e(4, b.R), e(5, b.D), e(6, b.F), e(7, b.ring), e(8, b.st, this.stBlock), e(9, b.cnt)],
     });
+  }
+
+  /** Upload the Coulomb kernel W(o)/bins for (n, v_int, Δt) and size the per-step bin table. Returns the kernel. */
+  private prepCoulomb(n: number, vInt: number, dt: number, dtA: number) {
+    const d = this.device, K = coulombKernel(n, vInt, dt), N = n * n, S = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
+    const binBlock = Math.max(256, Math.ceil(K.nBins * 16 / 256) * 256), key = `${n}|${K.nBins}|${vInt}|${dt}`;
+    if (!this.cBufs || this.cBinBlock < binBlock || this.cBufs.K.size !== 16 * N) {
+      this.cBufs?.CP.destroy(); this.cBufs?.K.destroy(); this.cBufs?.bins.destroy();
+      this.cBinBlock = Math.max(binBlock, this.cBinBlock);
+      this.cBufs = {
+        CP: d.createBuffer({ size: 256 * C_MAX_CHUNKS, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
+        K: d.createBuffer({ size: 16 * N, usage: S }),
+        bins: d.createBuffer({ size: this.cBinBlock * MAX_STEPS, usage: S }),
+      };
+      this.cKey = ''; this.cBind = null;
+    }
+    if (this.cKey !== key) {
+      const kb = new ArrayBuffer(16 * N), kf = new Float32Array(kb), ku = new Uint32Array(kb);
+      for (let o = 0; o < N; o++) { kf[4 * o] = K.wx[o]; kf[4 * o + 1] = K.wy[o]; ku[4 * o + 2] = K.bin[o]; }
+      d.queue.writeBuffer(this.cBufs.K, 0, kb); this.cKey = key;
+    }
+    const chunks = Math.ceil(N / C_CHUNK);
+    if (chunks > C_MAX_CHUNKS) throw new Error(`Coulomb: grid too large (${n}²)`);
+    const cp = new ArrayBuffer(256 * chunks), cu = new Uint32Array(cp), cf = new Float32Array(cp);
+    for (let c = 0; c < chunks; c++) { const o = 64 * c; cu[o] = n; cu[o + 1] = N; cu[o + 2] = c * C_CHUNK; cu[o + 3] = Math.min(N, (c + 1) * C_CHUNK); cf[o + 4] = dtA; }
+    d.queue.writeBuffer(this.cBufs.CP, 0, cp);
+    const b = this.bufs, bk = [b.U, b.R, b.ring, this.cBufs.K, this.cBufs.bins];
+    if (!this.cBind || bk.some((x, i) => x !== this.cBindKey[i])) {
+      const e = (i: number, buf: GPUBuffer, size?: number): GPUBindGroupEntry => ({ binding: i, resource: { buffer: buf, size } });
+      this.cBind = d.createBindGroup({ layout: this.cLayout, entries: [e(0, this.cBufs.CP, 32), e(1, b.U), e(2, b.R, 4 * N), e(3, b.ring), e(4, this.cBufs.K), e(5, this.cBufs.bins, this.cBinBlock)] });
+      this.cBindKey = bk;
+    }
+    return { K, chunks };
   }
 
   private resetHistory() { this.hist.clear(); this.slotOf.clear(); this.free = Array.from({ length: this.ringSlots }, (_, i) => i); }
@@ -142,6 +194,8 @@ export class GpuSolver {
       want = this.hist.capacity;
     }
     this.alloc(n, stencil.length, want);
+    const coul = p.repOn && p.repA !== 0 && p.repKind === 'coulomb' ? this.prepCoulomb(n, p.vInt, dt, dt * p.repA) : null;
+    const binData = coul ? new ArrayBuffer(this.cBinBlock * steps) : null;
     const q = this.device.queue, b = this.bufs;
     if (dyeDirty) q.writeBuffer(b.D, 0, Float32Array.from(s.dye));
     q.writeBuffer(b.F, 0, Float32Array.from(s.fx)); q.writeBuffer(b.F, 4 * N, Float32Array.from(s.fy));
@@ -195,6 +249,23 @@ export class GpuSolver {
       });
       // --- kernels ---
       pass('repulse', 0, m);
+      if (coul && binData) {
+        const bu = new Uint32Array(binData), bf = new Float32Array(binData), base2 = (this.cBinBlock * m) / 4;
+        for (let qb = 0; qb < coul.K.nBins; qb++) {
+          let a = CUR, bb = CUR, theta = 0;
+          if (qb > 0) {
+            const l = this.hist.lookup(t - qb * dt, t);
+            a = l.a < 0 ? CUR : this.slotOf.get(this.hist.frames[l.a])!;
+            bb = l.b < 0 ? CUR : this.slotOf.get(this.hist.frames[l.b])!;
+            theta = l.theta;
+          }
+          bu[base2 + 4 * qb] = a; bu[base2 + 4 * qb + 1] = bb; bf[base2 + 4 * qb + 2] = theta;
+        }
+        for (let c = 0; c < coul.chunks; c++) {
+          const cpass = enc.beginComputePass(); cpass.setPipeline(this.cPipe);
+          cpass.setBindGroup(0, this.cBind!, [256 * c, this.cBinBlock * m]); cpass.dispatchWorkgroups(wg, wg); cpass.end();
+        }
+      }
       if (m === 0) enc.clearBuffer(b.F);
       for (let l = 0; l < lameNs; l++) { pass('lame', 0, m); enc.copyBufferToBuffer(b.U2, 0, b.U, 0, 8 * N); }
       enc.clearBuffer(b.cnt, 0, 4); enc.clearBuffer(b.cnt, 8, 4);
@@ -206,6 +277,7 @@ export class GpuSolver {
       t += dt;
     }
     q.writeBuffer(b.st, 0, stData);
+    if (binData && this.cBufs) q.writeBuffer(this.cBufs.bins, 0, binData);
     enc.copyBufferToBuffer(b.U, 0, b.read, 0, 8 * N);
     enc.copyBufferToBuffer(b.R, 0, b.read, 8 * N, 4 * N);
     enc.copyBufferToBuffer(b.D, 0, b.read, 12 * N, 4 * N);

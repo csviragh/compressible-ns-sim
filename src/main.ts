@@ -40,7 +40,7 @@ function setBackend(b: 'cpu' | 'webgpu') {
   ($<HTMLSelectElement>('backend')).value = useGpu ? 'webgpu' : 'cpu';
   if (useGpu) gpu!.upload(solver);
   else solver.history.clear(); // the CPU ρ history restarts (GPU history is not copied back)
-  msPerStep = 0; backendInfo();
+  msPerStep = 0; backendInfo(); refresh();
 }
 async function initGpu() {
   try { gpu = await GpuSolver.create(); } catch (e) { gpu = null; gpuNote = 'WebGPU init failed: ' + (e as Error).message; }
@@ -81,10 +81,20 @@ function refresh() {
   $('zeta').innerHTML = `λ + 2μ = ${fmt(longitudinalViscosity(params))} (compressive) · ζ = λ + μ = ${fmt(bulkViscosity(params))}` +
     (clamped ? '<br><span class="warn">λ clamped to −2μ: λ + 2μ < 0 is ill-posed (anti-diffusion)</span>' : '');
   const ri = document.getElementById('rep-info');
+  const coul = params.repKind === 'coulomb';
+  document.querySelectorAll<HTMLElement>('.short-only').forEach((e) => (e.style.display = coul ? 'none' : ''));
+  document.querySelectorAll<HTMLElement>('.coulomb-only').forEach((e) => { e.hidden = false; e.style.display = coul ? '' : 'none'; });
   if (ri) {
-    const tm = Number.isFinite(params.vInt) ? params.R0 / params.vInt : 0;
-    ri.innerHTML = `α = ${fmt(params.alpha)} · max retardation R₀/v_int = ${fmt(tm)} s` +
-      (solver ? ` · ${solver.repulsionStencil().length} kernel cells · ρ history ${solver.history.frames.length} frames · ${solver.lastSubsteps} Lamé sub-step(s)` : '');
+    if (coul) {
+      const ret = Number.isFinite(params.vInt), N = solver ? solver.n * solver.n : 0;
+      ri.innerHTML = `2D Coulomb (periodic) · ${ret ? `retarded, max delay (√2/2)/v_int = ${fmt(Math.SQRT1_2 / params.vInt)} s · direct sum ${N ? (N * (N - 1)).toExponential(2) : '?'} pair terms/step` : 'instantaneous (FFT)'}` +
+        (solver ? ` · ρ history ${solver.history.frames.length} frames · ${solver.lastSubsteps} Lamé sub-step(s)` : '') +
+        (ret && params.repOn && !useGpu && solver && solver.n > 64 ? `<br><span class="warn">retarded Coulomb on the CPU is O(N²): ${solver.n}² will take seconds per step — switch to WebGPU or a ≤ 64² grid</span>` : '');
+    } else {
+      const tm = Number.isFinite(params.vInt) ? params.R0 / params.vInt : 0;
+      ri.innerHTML = `α = ${fmt(params.alpha)} · max retardation R₀/v_int = ${fmt(tm)} s` +
+        (solver ? ` · ${solver.repulsionStencil().length} kernel cells · ρ history ${solver.history.frames.length} frames · ${solver.lastSubsteps} Lamé sub-step(s)` : '');
+    }
   }
 }
 bindSlider('repA', () => params.repA, (v) => (params.repA = v));
@@ -92,6 +102,8 @@ bindSlider('R0', () => params.R0, (v) => (params.R0 = v));
 bindSlider('alpha', () => params.alpha, (v) => (params.alpha = v));
 const VMAX = 2; // log10 slider max → ∞
 bindSlider('vInt', () => params.vInt, (v) => (params.vInt = v >= VMAX ? Infinity : 10 ** v), (x) => (Number.isFinite(x) ? Math.log10(x) : VMAX));
+$<HTMLSelectElement>('rep-kind').value = params.repKind;
+$<HTMLSelectElement>('rep-kind').addEventListener('change', (e) => { params.repKind = (e.target as HTMLSelectElement).value as 'short' | 'coulomb'; refresh(); });
 $<HTMLInputElement>('rep-on').addEventListener('change', (e) => { params.repOn = (e.target as HTMLInputElement).checked; refresh(); });
 $<HTMLInputElement>('lame-on').addEventListener('change', (e) => { params.lameOn = (e.target as HTMLInputElement).checked; refresh(); });
 refresh();

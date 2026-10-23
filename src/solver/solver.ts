@@ -20,6 +20,7 @@
  * semi-Lagrangian advection (bilinear, periodic) → exact self-propulsion relaxation.
  */
 import { FieldHistory } from './delay';
+import { coulombKernel, coulombFFT, COULOMB_DMAX } from './coulomb';
 
 export interface Params {
   mu: number;       // shear viscosity μ
@@ -33,6 +34,8 @@ export interface Params {
   lameOn: boolean;
   /** Pairwise repulsion: on/off, strength A, range R₀, smoothing width r (0 = Heaviside), propagation speed v_int (Infinity = instantaneous). */
   repOn: boolean; repA: number; R0: number; alpha: number; vInt: number;
+  /** Interaction law: 'short' = kernel K(d) of range R₀ / exponent α; 'coulomb' = periodic 2D Coulomb (1/d, no cutoff). */
+  repKind: 'short' | 'coulomb';
 }
 
 /**
@@ -50,7 +53,7 @@ export function repulsionKernel(d: number, R0: number, alpha: number): number {
 
 export const defaultParams = (): Params => ({
   mu: 1e-4, lambda: 0, selfProp: true, tau: 0.5, v0: 0.5, dt: 1 / 60, dyeFade: 0,
-  lameOn: true, repOn: false, repA: 0.5, R0: 0.04, alpha: 1, vInt: Infinity,
+  lameOn: true, repOn: false, repA: 0.5, R0: 0.04, alpha: 1, vInt: Infinity, repKind: 'short',
 });
 
 /** Longitudinal (compressive) viscosity λ + 2μ. */
@@ -153,6 +156,7 @@ export class Solver {
 
   /** Stencil of the repulsion kernel: grid offsets with 0 < d < R₀, weight A·K(d)·h²·ê and retardation d/v_int. */
   repulsionStencil(): { di: number; dj: number; wx: number; wy: number; delay: number }[] {
+    if (this.params.repKind === 'coulomb') return [];
     const { n, h } = this, { repA, R0, alpha, vInt } = this.params, m = Math.min(Math.floor(n / 2) - 1, Math.ceil(R0 / h));
     const out: { di: number; dj: number; wx: number; wy: number; delay: number }[] = [];
     for (let dj = -m; dj <= m; dj++) for (let di = -m; di <= m; di++) {
@@ -167,7 +171,8 @@ export class Solver {
 
   /** Longest retardation the density history must cover (0 = instantaneous or off). */
   delayMax(): number {
-    const { repOn, R0, vInt } = this.params;
+    const { repOn, R0, vInt, repKind } = this.params;
+    if (repKind === 'coulomb') return repOn && vInt > 0 && Number.isFinite(vInt) ? COULOMB_DMAX / vInt + this.params.dt : 0;
     return repOn && R0 > 0 && vInt > 0 && Number.isFinite(vInt) ? R0 / vInt : 0;
   }
 
@@ -176,6 +181,7 @@ export class Solver {
    * density at t − d/v_int (history lookup, linear in time; the current ρ is the newest point).
    */
   repulsion(ox: Float64Array, oy: Float64Array) {
+    if (this.params.repKind === 'coulomb') { this.coulomb(ox, oy); return; }
     ox.fill(0); oy.fill(0);
     const { n, rho, history } = this;
     for (const s of this.repulsionStencil()) {
@@ -192,6 +198,45 @@ export class Solver {
       for (let j = 0; j < n; j++) {
         const sj = ((j + s.dj + n) % n) * n, jj = j * n;
         for (let i = 0; i < n; i++) { const r = src[sj + (i + s.di + n) % n]; ox[jj + i] += s.wx * r; oy[jj + i] += s.wy * r; }
+      }
+    }
+  }
+
+  /** ρ at time T (history lookup, linear in time; current ρ for T ≥ t) — written into `tmp` if interpolated. */
+  private rhoAt(T: number): ArrayLike<number> {
+    const { rho, history } = this, l = history.lookup(T, this.t);
+    if (l.a < 0 && l.b < 0) return rho;
+    if (l.a >= 0 && l.theta === 0) return history.frames[l.a].u;
+    const fa = l.a < 0 ? rho : history.frames[l.a].u, fb = l.b < 0 ? rho : history.frames[l.b].u, t = this.tmp;
+    for (let k = 0; k < t.length; k++) t[k] = (1 - l.theta) * fa[k] + l.theta * fb[k];
+    return t;
+  }
+
+  /**
+   * Periodic 2D Coulomb repulsion (see coulomb.ts): f = −A∇φ, −∇²φ = 2π(ρ − ρ̄).
+   * v_int = ∞: FFT, O(N log N). Retarded: direct sum over all N − 1 offsets grouped by delay bin
+   * q·Δt (q = round(d_min/(v_int Δt))), O(N²) per step.
+   */
+  coulomb(ox: Float64Array, oy: Float64Array, forceDirect = false) {
+    const { n, rho } = this, { repA, vInt, dt } = this.params, N = n * n;
+    const inst = !(vInt > 0) || !Number.isFinite(vInt);
+    if (inst && !forceDirect) {
+      coulombFFT(n, rho, ox, oy);
+      for (let k = 0; k < N; k++) { ox[k] *= repA; oy[k] *= repA; }
+      return;
+    }
+    ox.fill(0); oy.fill(0);
+    const K = coulombKernel(n, vInt, dt);
+    for (let q = 0; q < K.nBins; q++) {
+      const a = K.binStart[q], b = K.binStart[q + 1];
+      if (a === b) continue;
+      const src = q === 0 ? rho : this.rhoAt(this.t - q * dt);
+      for (let m = a; m < b; m++) {
+        const o = K.order[m], oi = o % n, oj = (o / n) | 0, wx = repA * K.wx[o], wy = repA * K.wy[o];
+        for (let j = 0; j < n; j++) {
+          const sj = ((j - oj + n) % n) * n, jj = j * n;
+          for (let i = 0; i < n; i++) { const r = src[sj + (i - oi + n) % n]; ox[jj + i] += wx * r; oy[jj + i] += wy * r; }
+        }
       }
     }
   }

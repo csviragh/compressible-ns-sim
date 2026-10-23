@@ -55,8 +55,34 @@ one frame per Δt, linear interpolation in time, current ρ = newest point). v_i
 end) is instantaneous and keeps no history. Only the repulsion is retarded; Lamé, advection,
 self-propulsion and density transport use the present state.
 
-UI: enable, strength A, R₀, α, v_int (log slider, rightmost = ∞).
+UI: enable, interaction law (short-range kernel / 2D Coulomb), strength A, R₀, α, v_int (log slider, rightmost = ∞).
 Cost is O(N·(R₀/h)²) per step (direct sum, about 300 offsets at the defaults on 256²).
+
+### 2D Coulomb repulsion (no cutoff)
+
+Selectable with the *Interaction* switch. R₀ and α are hidden (unused). It is the force of the 2D log potential
+on the periodic unit square with a neutralising uniform background:
+
+```
+−∇²φ = 2π (ρ − ρ̄),   f_rep = −A ∇φ
+⇔  f_rep(x, t) = A Σ_{y ≠ x} ρ(y, t − d_min(x, y)/v_int) · W(x − y),   W(o) = h² F_per(o)
+```
+
+F_per is the exact periodic force of a unit point source (all periodic images, background subtracted),
+F_per(r) ≈ r/|r|² for |r| ≪ 1, computed once per grid by Ewald summation (width σ = 0.08: 3×3 real-space
+images with e^{−r²/2σ²}, plus Σ_{k≠0} 2π k sin(k·r) e^{−k²σ²/2}/k², |m| ≤ 12). The self cell is excluded and
+Σ_o W(o) = 0, so uniform density gives exactly zero force.
+
+* **Instantaneous (v_int = ∞):** CPU uses an FFT circular convolution with W (identical to the direct sum), O(N log N).
+* **Retarded:** the delay uses the minimum-image distance d_min (≤ √2/2) and is rounded to the time step,
+  τ = q·Δt with q = round(d_min/(v_int Δt)); offsets are grouped by q and each group reads ρ(t − qΔt) from the same
+  ρ history as the short-range kernel. This is a direct sum over all N − 1 offsets, **O(N²) per step**
+  (1.7·10⁷ pair terms at 64², 2.7·10⁸ at 128², 4.3·10⁹ at 256²). Measured on the CPU (Node, one core):
+  64² ≈ 0.22 s/step, 128² ≈ 3.3 s/step, 256² ≈ 50 s/step (extrapolated); instantaneous FFT at 256² ≈ 0.14 s/step.
+  The UI warns when retarded Coulomb runs on the CPU above 64². On WebGPU the direct sum is a compute shader
+  (`src/gpu/coulomb.wgsl`, offsets split into chunks of 4096 per dispatch); the GPU always uses the direct sum,
+  also for v_int = ∞.
+* Only the repulsion is retarded; Lamé is unaffected.
 
 ### Order parameter / correlations
 
@@ -168,6 +194,7 @@ so the delay lookups are the same as in the CPU code. GPU arithmetic is f32 (CPU
 * ∇·u ≠ 0 is retained; λ clamping
 * delay buffer reproduces a known shifted history; lookup returns the present for T ≥ now, clamps before the oldest frame and interpolates in between
 * kernel: diverges and decreases monotonically as d → 0; K(R₀) = 0, K′(R₀) = 0; zero for d ≥ R₀ and at d = 0; α clamped to [0.1, 1.95]
+* Coulomb: zero force for uniform ρ (FFT and retarded); W ≈ h²/d along an axis; bump force radially outward ≈ M/d; FFT = direct periodic-kernel sum (1e-10); retarded signal arrives after d/v_int (± 1.5Δt); full step conserves mass
 * repulsion: zero force for uniform ρ, outward push around a density bump; retarded signal arrives at distance d after d/v_int (± 2Δt); v_int = ∞ is instantaneous
 * Lamé switch off leaves u untouched by viscosity
 * density-weighted Φ_ρ, ⟨|u|⟩_ρ and ⟨cos θ⟩_ρ: uniform ρ equals unweighted; zero-density cells contribute nothing; aligned flow gives 1

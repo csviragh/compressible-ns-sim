@@ -15,9 +15,19 @@ const cases = [
   ['repulsion instantaneous', { repOn: true, vInt: Infinity, lambda: 2e-4 }],
   ['repulsion retarded v_int=0.3 (after 40 steps of history)', { repOn: true, vInt: 0.3, lambda: 2e-4 }],
 ];
-for (const [name, pp] of cases) {
+const coulombCases = [
+  ['Coulomb instantaneous (CPU FFT vs GPU direct sum), 64²', { repOn: true, repKind: 'coulomb', vInt: Infinity, repA: 0.5, lambda: 2e-4 }],
+  ['Coulomb retarded v_int=0.3, 64²', { repOn: true, repKind: 'coulomb', vInt: 0.3, repA: 0.5, lambda: 2e-4 }],
+  ['Coulomb retarded v_int=2, 64²', { repOn: true, repKind: 'coulomb', vInt: 2, repA: 0.5, lambda: 2e-4 }],
+];
+const grid = async (n) => { await p.evaluate((n) => { const g = document.getElementById('grid'); if (![...g.options].some(o => o.value === String(n))) { const o = document.createElement('option'); o.value = String(n); o.textContent = n; g.appendChild(o); } g.value = String(n); g.dispatchEvent(new Event('change')); }, n); await new Promise((r) => setTimeout(r, 500)); };
+const only = process.env.CASES; // 'coulomb' → only the Coulomb cases
+const all = only === 'coulomb' ? [] : cases.map(c => [...c, 256]);
+for (const c of coulombCases) all.push([...c, 64]);
+for (const [name, pp, n] of all) {
+  await grid(n);
   const r = await p.evaluate(async (pp) => {
-    const a = window.app; Object.assign(a.params, { lameOn: true, repOn: false, vInt: Infinity, lambda: 0 }, pp);
+    const a = window.app; Object.assign(a.params, { lameOn: true, repOn: false, vInt: Infinity, lambda: 0, repKind: 'short', repA: 0.5 }, pp);
     a.solver.seedRandom(3, 0.3); a.solver.u.forEach((_, k) => a.solver.rho[k] = 1 + 0.3 * Math.sin(k * 0.05));
     return await a.compare(40);
   }, pp);
