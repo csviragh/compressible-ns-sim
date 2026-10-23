@@ -13,8 +13,8 @@
  * (Lamé) coefficient, so the compressive part (λ+μ)∇(∇·u) is fully active when λ ≠ −μ.
  *
  * Pairwise repulsion (retarded): every cell is a fluid element of mass ρh². A source at y acts on x with
- *   f_rep(x,t) = A Σ_y ρ(y, t − |x−y|/v_int) S(|x−y|) (x−y)/|x−y| h²,
- * S = smoothed step of range R₀ and width r (see `repulsionProfile`). Only the repulsion is retarded.
+ *   f_rep(x,t) = A Σ_y ρ(y, t − |x−y|/v_int) K(|x−y|) (x−y)/|x−y| h²,
+ * K = divergent kernel of range R₀ and exponent α (see `repulsionKernel`). Only the repulsion is retarded.
  *
  * Step (operator splitting): forces + retarded repulsion → explicit (forward-Euler, sub-stepped) Lamé step →
  * semi-Lagrangian advection (bilinear, periodic) → exact self-propulsion relaxation.
@@ -32,26 +32,25 @@ export interface Params {
   /** Lamé viscous operator ∇·σ on/off. */
   lameOn: boolean;
   /** Pairwise repulsion: on/off, strength A, range R₀, smoothing width r (0 = Heaviside), propagation speed v_int (Infinity = instantaneous). */
-  repOn: boolean; repA: number; R0: number; rSmooth: number; vInt: number;
+  repOn: boolean; repA: number; R0: number; alpha: number; vInt: number;
 }
 
 /**
- * Repulsion profile S(d) on [0, R₀]: 1 for d ≤ R₀ − r, 0 for d ≥ R₀, and in between a normalised
- * tanh sigmoid centred at c = R₀ − r/2:  S = ½[1 − tanh(β x)/tanh β],  x = (d − c)/(r/2) ∈ [−1, 1], β = 1.
- * r = 0 → Heaviside H(R₀ − d); r = R₀ → close to linear 1 − d/R₀ (max deviation ≈ 0.06). r is clamped to [0, R₀].
+ * Divergent repulsion kernel (without the strength A):
+ *   K(d) = [(R₀/d)^α − 1](1 − d/R₀)²  for 0 < d < R₀,  0 otherwise.
+ * K → ∞ as d → 0, decreases monotonically, K(R₀) = K'(R₀) = 0. α is clamped to [ALPHA_MIN, ALPHA_MAX]
+ * (α = 0 would make K ≡ 0; α ≥ 2 makes the 2D integral ∫K(d)·d dd diverge → grid-dependent).
  */
-export const SIGMOID_BETA = 1;
-export function repulsionProfile(d: number, R0: number, r: number): number {
-  if (!(R0 > 0) || d >= R0) return 0;
-  r = Math.min(Math.max(r, 0), R0);
-  if (d <= R0 - r) return 1;
-  const x = (d - (R0 - r / 2)) / (r / 2);
-  return 0.5 * (1 - Math.tanh(SIGMOID_BETA * x) / Math.tanh(SIGMOID_BETA));
+export const ALPHA_MIN = 0.1, ALPHA_MAX = 1.95;
+export function repulsionKernel(d: number, R0: number, alpha: number): number {
+  if (!(R0 > 0) || !(d > 0) || d >= R0) return 0;
+  const a = Math.min(Math.max(alpha, ALPHA_MIN), ALPHA_MAX), x = 1 - d / R0;
+  return ((R0 / d) ** a - 1) * x * x;
 }
 
 export const defaultParams = (): Params => ({
   mu: 1e-4, lambda: 0, selfProp: true, tau: 0.5, v0: 0.5, dt: 1 / 60, dyeFade: 0,
-  lameOn: true, repOn: false, repA: 0.5, R0: 0.04, rSmooth: 0.02, vInt: Infinity,
+  lameOn: true, repOn: false, repA: 0.5, R0: 0.04, alpha: 1, vInt: Infinity,
 });
 
 /** Longitudinal (compressive) viscosity λ + 2μ. */
@@ -135,13 +134,13 @@ export class Solver {
     }
   }
 
-  /** Stencil of the repulsion kernel: grid offsets with 0 < d < R₀, weight A·S(d)·h²·ê and retardation d/v_int. */
+  /** Stencil of the repulsion kernel: grid offsets with 0 < d < R₀, weight A·K(d)·h²·ê and retardation d/v_int. */
   repulsionStencil(): { di: number; dj: number; wx: number; wy: number; delay: number }[] {
-    const { n, h } = this, { repA, R0, rSmooth, vInt } = this.params, m = Math.min(Math.floor(n / 2) - 1, Math.ceil(R0 / h));
+    const { n, h } = this, { repA, R0, alpha, vInt } = this.params, m = Math.min(Math.floor(n / 2) - 1, Math.ceil(R0 / h));
     const out: { di: number; dj: number; wx: number; wy: number; delay: number }[] = [];
     for (let dj = -m; dj <= m; dj++) for (let di = -m; di <= m; di++) {
       if (!di && !dj) continue;
-      const d = h * Math.hypot(di, dj), S = repulsionProfile(d, R0, rSmooth);
+      const d = h * Math.hypot(di, dj), S = repulsionKernel(d, R0, alpha);
       if (S <= 0) continue;
       const w = repA * S * h * h / d; // × (x − y) = −(di, dj)·h gives A S h² ê
       out.push({ di, dj, wx: -w * di * h, wy: -w * dj * h, delay: vInt > 0 && Number.isFinite(vInt) ? d / vInt : 0 });

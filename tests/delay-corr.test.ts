@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Solver, defaultParams, repulsionProfile } from '../src/solver/solver';
+import { Solver, defaultParams, repulsionKernel, ALPHA_MIN, ALPHA_MAX } from '../src/solver/solver';
 import { FieldHistory } from '../src/solver/delay';
 import { OrderAnalyzer } from '../src/solver/correlations';
 
@@ -28,29 +28,33 @@ describe('delay buffer', () => {
 });
 
 describe('repulsion', () => {
-  it('sigmoid: r = 0 is the Heaviside step H(R0 − d)', () => {
-    for (const d of [0, 0.01, 0.0399, 0.04, 0.05]) expect(repulsionProfile(d, 0.04, 0)).toBe(d < 0.04 ? 1 : 0);
-  });
-  it('sigmoid: small r is a sharp step, r = R0 is nearly linear', () => {
-    expect(repulsionProfile(0.039, 0.04, 1e-4)).toBe(1);
-    expect(repulsionProfile(0.04 - 5e-5, 0.04, 1e-4)).toBeCloseTo(0.5, 9);
-    let e = 0, prev = 2;
-    for (let q = 0; q <= 100; q++) {
-      const d = 0.04 * q / 100, S = repulsionProfile(d, 0.04, 0.04);
-      e = Math.max(e, Math.abs(S - (1 - d / 0.04))); expect(S).toBeLessThanOrEqual(prev); prev = S;
+  it('kernel: diverges as d → 0 and decreases monotonically', () => {
+    for (const a of [0.1, 1, 1.95]) {
+      let prev = Infinity;
+      for (let q = 1; q < 200; q++) { const K = repulsionKernel(0.04 * q / 200, 0.04, a); expect(K).toBeLessThan(prev); prev = K; }
+      expect(repulsionKernel(1e-9, 0.04, a)).toBeGreaterThan(repulsionKernel(1e-6, 0.04, a));
     }
-    expect(e).toBeLessThan(0.07);
-    expect(repulsionProfile(0, 0.04, 0.04)).toBeCloseTo(1, 12); expect(repulsionProfile(0.04, 0.04, 0.04)).toBe(0);
+    expect(repulsionKernel(1e-8, 0.04, 1)).toBeGreaterThan(1e5);
+  });
+  it('kernel: K(R0) = 0, K\'(R0) = 0, zero for d ≥ R0 and the own cell; α clamped to [0.1, 1.95]', () => {
+    const R0 = 0.04, e = 1e-6;
+    expect(repulsionKernel(R0, R0, 1)).toBe(0);
+    expect((repulsionKernel(R0 - e, R0, 1) - repulsionKernel(R0 - 2 * e, R0, 1)) / e).toBeCloseTo(0, 6);
+    for (const d of [R0, 0.05, 1]) expect(repulsionKernel(d, R0, 1.5)).toBe(0);
+    expect(repulsionKernel(0, R0, 1)).toBe(0);
+    expect(repulsionKernel(0.01, R0, 0)).toBe(repulsionKernel(0.01, R0, ALPHA_MIN));
+    expect(repulsionKernel(0.01, R0, 3)).toBe(repulsionKernel(0.01, R0, ALPHA_MAX));
+    expect(repulsionKernel(0.01, R0, 1)).toBeCloseTo((4 - 1) * 0.75 ** 2, 12);
   });
   it('uniform density feels no net force; a density bump pushes fluid outward (compressible, ∇·u > 0)', () => {
-    const n = 32, s = new Solver(n, { ...defaultParams(), repOn: true, R0: 0.15, rSmooth: 0.05 });
+    const n = 32, s = new Solver(n, { ...defaultParams(), repOn: true, R0: 0.15 });
     const fx = new Float64Array(n * n), fy = new Float64Array(n * n);
     s.repulsion(fx, fy); expect(Math.max(...fx.map(Math.abs), ...fy.map(Math.abs))).toBeLessThan(1e-12);
     s.rho[16 * n + 16] = 5; s.repulsion(fx, fy);
     expect(fx[16 * n + 18]).toBeGreaterThan(0); expect(fx[16 * n + 14]).toBeLessThan(0); expect(fy[18 * n + 16]).toBeGreaterThan(0);
   });
   it('retarded: a density change reaches distance d only after d/v_int', () => {
-    const n = 32, vInt = 0.5, p = { ...defaultParams(), repOn: true, R0: 0.2, rSmooth: 0, vInt, mu: 0, lambda: 0, selfProp: false };
+    const n = 32, vInt = 0.5, p = { ...defaultParams(), repOn: true, R0: 0.2, vInt, mu: 0, lambda: 0, selfProp: false };
     const s = new Solver(n, p), fx = new Float64Array(n * n), fy = new Float64Array(n * n), dt = 1 / 60;
     const probe = 16 * n + 16 + 4, d = 4 / n; // target 4 cells east of the source, delay 0.25 s
     let tArrive = -1;

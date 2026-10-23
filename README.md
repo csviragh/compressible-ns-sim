@@ -29,23 +29,25 @@ distance-dependent one of the repulsion.
 Each grid cell is a fluid element of mass ρh². The source cell y pushes cell x away with
 
 ```
-f_rep(x, t) = A Σ_{y ≠ x, |x−y| < R₀} ρ(y, t − |x−y|/v_int) · S(|x−y|) · (x − y)/|x − y| · h²
+f_rep(x, t) = A Σ_{y ≠ x, |x−y| < R₀} ρ(y, t − |x−y|/v_int) · K(|x−y|) · (x − y)/|x − y| · h²
 ```
 
 (acceleration of x; i.e. pair force ∝ ρ(x)ρ(y), divided by the mass of x). Periodic minimum-image
 offsets; uniform ρ gives zero net force.
 
-**Profile S(d)** (range R₀, smoothing width r ∈ [0, R₀]):
+**Kernel K(d)** (range R₀, exponent α):
 
 ```
-S(d) = 1                                   d ≤ R₀ − r
-S(d) = ½ [1 − tanh(β x) / tanh β],  x = (d − (R₀ − r/2)) / (r/2) ∈ [−1, 1],  β = 1
-S(d) = 0                                   d ≥ R₀
+K(d) = [(R₀/d)^α − 1] · (1 − d/R₀)²     0 < d < R₀,     K(d) = 0 otherwise (own cell d = 0 excluded)
 ```
 
-* r = 0: Heaviside H(R₀ − d) (full repulsion inside R₀, none outside);
-* increasing r widens the smooth shoulder ending exactly at R₀ (compact support);
-* r = R₀: close to linear 1 − d/R₀ (max deviation ≈ 0.06, tested).
+* K → ∞ as d → 0 (divergent, short-range-dominated repulsion), monotonically decreasing;
+* K(R₀) = 0 and K′(R₀) = 0: the force switches off smoothly at the range;
+* α ∈ [0.1, 1.95] (slider, default 1). α = 0 gives K ≡ 0, so the minimum is 0.1 (also enforced in code).
+* **In 2D the continuum force integral ∫ K(d) d dd (area element 2πd dd) converges only for α < 2.**
+  For α ≥ 2 it diverges at d → 0, the sum is dominated by the nearest grid cells and the results become
+  grid-dependent (they change with h); hence the slider stops at 1.95. Even for α < 2 close to 2 the
+  nearest-neighbour cells carry most of the weight.
 
 **Retardation:** the interaction propagates at v_int, so the source density is read at
 t − d/v_int (Eulerian, at the fixed source cell) from a ring buffer of past ρ fields (`FieldHistory`,
@@ -53,7 +55,7 @@ one frame per Δt, linear interpolation in time, current ρ = newest point). v_i
 end) is instantaneous and keeps no history. Only the repulsion is retarded; Lamé, advection,
 self-propulsion and density transport use the present state.
 
-UI: enable, strength A, R₀, r (as a fraction of R₀), v_int (log slider, rightmost = ∞).
+UI: enable, strength A, R₀, α, v_int (log slider, rightmost = ∞).
 Cost is O(N·(R₀/h)²) per step (direct sum, about 300 offsets at the defaults on 256²).
 
 ### Order parameter / correlations
@@ -148,7 +150,7 @@ so the delay lookups are the same as in the CPU code. GPU arithmetic is f32 (CPU
 * periodicity: a uniformly advected pattern wraps around the torus unchanged; viscosity conserves mean momentum
 * ∇·u ≠ 0 is retained; λ clamping
 * delay buffer reproduces a known shifted history; lookup returns the present for T ≥ now, clamps before the oldest frame and interpolates in between
-* sigmoid: r = 0 is exactly Heaviside; tiny r is a sharp step centred at R₀ − r/2; r = R₀ is monotone and within 0.07 of linear
+* kernel: diverges and decreases monotonically as d → 0; K(R₀) = 0, K′(R₀) = 0; zero for d ≥ R₀ and at d = 0; α clamped to [0.1, 1.95]
 * repulsion: zero force for uniform ρ, outward push around a density bump; retarded signal arrives at distance d after d/v_int (± 2Δt); v_int = ∞ is instantaneous
 * Lamé switch off leaves u untouched by viscosity
 * correlations: aligned field gives ⟨cos⟩ = 1 and C(r) = 1; ordered + perturbation start gives ⟨cos⟩ ≈ 0.95
@@ -163,4 +165,4 @@ npm test
 npm run build
 ```
 
-CI runs tests and the build on every push; pushes to `main` deploy to GitHub Pages.
+CI runs tests and the build on every push; pushes to `main` deploy to GitHub Pages (root only).

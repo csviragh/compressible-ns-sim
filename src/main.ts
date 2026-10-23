@@ -83,14 +83,13 @@ function refresh() {
   const ri = document.getElementById('rep-info');
   if (ri) {
     const tm = Number.isFinite(params.vInt) ? params.R0 / params.vInt : 0;
-    ri.innerHTML = `r = ${fmt(params.rSmooth)} · max retardation R₀/v_int = ${fmt(tm)} s` +
+    ri.innerHTML = `α = ${fmt(params.alpha)} · max retardation R₀/v_int = ${fmt(tm)} s` +
       (solver ? ` · ${solver.repulsionStencil().length} kernel cells · ρ history ${solver.history.frames.length} frames · ${solver.lastSubsteps} Lamé sub-step(s)` : '');
   }
 }
-let rFrac = params.rSmooth / params.R0;
 bindSlider('repA', () => params.repA, (v) => (params.repA = v));
-bindSlider('R0', () => params.R0, (v) => { params.R0 = v; params.rSmooth = rFrac * v; });
-bindSlider('rS', () => rFrac, (v) => { rFrac = v; params.rSmooth = v * params.R0; });
+bindSlider('R0', () => params.R0, (v) => (params.R0 = v));
+bindSlider('alpha', () => params.alpha, (v) => (params.alpha = v));
 const VMAX = 2; // log10 slider max → ∞
 bindSlider('vInt', () => params.vInt, (v) => (params.vInt = v >= VMAX ? Infinity : 10 ** v), (x) => (Number.isFinite(x) ? Math.log10(x) : VMAX));
 $<HTMLInputElement>('rep-on').addEventListener('change', (e) => { params.repOn = (e.target as HTMLInputElement).checked; refresh(); });
