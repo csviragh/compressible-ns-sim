@@ -186,7 +186,7 @@ function render() {
   ctx.putImageData(img, 0, 0);
   drawArrows();
   let rmin = Infinity, rmax = -Infinity; for (const r of solver.rho) { if (r < rmin) rmin = r; if (r > rmax) rmax = r; }
-  $('stats').textContent = `${n}² · t=${solver.t.toFixed(2)} s · dt=${params.dt.toFixed(4)} · Ekin=${solver.kineticEnergy().toExponential(3)} · ⟨|u|⟩=${solver.meanSpeed().toFixed(3)} · polar order=${solver.polarOrder().toFixed(3)} · rms ∇·u=${solver.rmsDivergence().toExponential(2)} · mass=${solver.totalMass().toFixed(12)} · ρ∈[${rmin.toFixed(3)}, ${rmax.toFixed(3)}]` + (solver.floorHits ? ` · ρ-floor hits ${solver.floorHits}` : '');
+  $('stats').textContent = `${n}² · t=${solver.t.toFixed(2)} s · dt=${params.dt.toFixed(4)} · Ekin=${solver.kineticEnergy().toExponential(3)} · ⟨|u|⟩=${solver.meanSpeed().toFixed(3)} · ⟨|u|⟩_ρ=${solver.meanSpeedRho().toFixed(3)} · polar order Φ=${solver.polarOrder().toFixed(3)} · Φ_ρ=${solver.polarOrderRho().toFixed(3)} · rms ∇·u=${solver.rmsDivergence().toExponential(2)} · mass=${solver.totalMass().toFixed(12)} · ρ∈[${rmin.toFixed(3)}, ${rmax.toFixed(3)}]` + (solver.floorHits ? ` · ρ-floor hits ${solver.floorHits}` : '');
 }
 function drawArrows() {
   const r = over.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;

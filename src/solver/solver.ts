@@ -65,6 +65,23 @@ export function clampParams(p: Params): boolean {
   return false;
 }
 
+/**
+ * Polar order and mean speed, optionally density-weighted (shared by both backends: the GPU fields are
+ * read back into the same arrays). Φ = |Σ w_i û_i| / Σ w_i and ⟨|u|⟩ = Σ w_i |u_i| / Σ w_i, with
+ * w_i = 1 (unweighted) or ρ_i. Cells with |u_i| ≤ 1e-12 have no direction and are left out of BOTH sums
+ * of Φ (so uniform ρ gives exactly the unweighted Φ); the mean speed sums over all cells.
+ * Returns 0 if the weight sum is 0.
+ */
+export function orderStats(u: ArrayLike<number>, v: ArrayLike<number>, w?: ArrayLike<number>) {
+  let sx = 0, sy = 0, wd = 0, ws = 0, wa = 0;
+  for (let k = 0; k < u.length; k++) {
+    const wk = w ? w[k] : 1, s = Math.hypot(u[k], v[k]);
+    ws += wk * s; wa += wk;
+    if (s > 1e-12) { sx += wk * u[k] / s; sy += wk * v[k] / s; wd += wk; }
+  }
+  return { phi: wd > 0 ? Math.hypot(sx, sy) / wd : 0, meanSpeed: wa > 0 ? ws / wa : 0 };
+}
+
 export function rng(seed: number) {
   let a = seed >>> 0;
   return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
@@ -327,11 +344,11 @@ export class Solver {
   kineticEnergy() { let e = 0; for (let k = 0; k < this.u.length; k++) e += this.u[k] ** 2 + this.v[k] ** 2; return 0.5 * e * this.h * this.h; }
   meanSpeed() { let s = 0; for (let k = 0; k < this.u.length; k++) s += Math.hypot(this.u[k], this.v[k]); return s / this.u.length; }
   /** Polar order |⟨u/|u|⟩|. */
-  polarOrder() {
-    let sx = 0, sy = 0, c = 0;
-    for (let k = 0; k < this.u.length; k++) { const s = Math.hypot(this.u[k], this.v[k]); if (s > 1e-12) { sx += this.u[k] / s; sy += this.v[k] / s; c++; } }
-    return c ? Math.hypot(sx, sy) / c : 0;
-  }
+  polarOrder() { return orderStats(this.u, this.v).phi; }
+  /** Density-weighted polar order Φ_ρ = |Σρ_i û_i| / Σρ_i (cells with u = 0 left out). */
+  polarOrderRho() { return orderStats(this.u, this.v, this.rho).phi; }
+  /** Density-weighted mean speed Σρ_i|u_i| / Σρ_i. */
+  meanSpeedRho() { return orderStats(this.u, this.v, this.rho).meanSpeed; }
   rmsDivergence() { const f = new Float64Array(this.u.length); this.field('divergence', f); let s = 0; for (const x of f) s += x * x; return Math.sqrt(s / f.length); }
 
   field(kind: 'density' | 'speed' | 'vorticity' | 'divergence' | 'direction' | 'dye', out: Float64Array) {

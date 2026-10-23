@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Solver, defaultParams, repulsionKernel, ALPHA_MIN, ALPHA_MAX } from '../src/solver/solver';
+import { Solver, defaultParams, repulsionKernel, ALPHA_MIN, ALPHA_MAX, orderStats } from '../src/solver/solver';
 import { FieldHistory } from '../src/solver/delay';
 import { OrderAnalyzer } from '../src/solver/correlations';
 
@@ -79,6 +79,41 @@ describe('Lamé switch', () => {
     p.lameOn = true; const N = u0.length, lx = new Float64Array(N), ly = new Float64Array(N);
     s.lame(s.u, s.v, lx, ly); const ns = Math.ceil(p.dt * s.spectralBound() / 1.8); s.viscous(p.dt);
     expect(ns).toBe(s.lastSubsteps); expect(Math.abs(s.u[5] - u0[5])).toBeGreaterThan(0);
+  });
+});
+
+describe('density-weighted order', () => {
+  const field = (n: number) => { const s = new Solver(n, defaultParams()); s.seedRandom(11, 0.3); return s; };
+  it('uniform ρ equals the unweighted values', () => {
+    const s = field(32); s.rho.fill(2.5);
+    expect(s.polarOrderRho()).toBeCloseTo(s.polarOrder(), 12);
+    expect(s.meanSpeedRho()).toBeCloseTo(s.meanSpeed(), 12);
+    const an = new OrderAnalyzer(), get = (i: number, j: number): [number, number] => [s.u[j * 32 + i], s.v[j * 32 + i]];
+    const st = an.analyze(32, 32, get, { periodicX: true, periodicY: true, correlation: false, weights: s.rho, seed: 1 });
+    expect(st.meanCosW).toBeCloseTo(st.meanCos, 12); expect(st.phiDirW).toBeCloseTo(st.phiDir, 12);
+    for (let k = 0; k < st.hist.length; k++) expect(st.histW[k]).toBeCloseTo(st.hist[k], 9);
+  });
+  it('zero-density cells contribute nothing', () => {
+    const s = field(32), N = 32 * 32;
+    for (let k = 0; k < N; k++) s.rho[k] = k % 3 === 0 ? 0 : 1.7;
+    const t = new Solver(32, defaultParams()), keep: number[] = [];
+    for (let k = 0; k < N; k++) if (s.rho[k] > 0) keep.push(k);
+    const uu = keep.map((k) => s.u[k]), vv = keep.map((k) => s.v[k]);
+    const ref = orderStats(uu, vv);
+    expect(s.polarOrderRho()).toBeCloseTo(ref.phi, 12); expect(s.meanSpeedRho()).toBeCloseTo(ref.meanSpeed, 12);
+    // a zero-density cell with a wild velocity changes nothing
+    const p0 = s.polarOrderRho(), m0 = s.meanSpeedRho(); s.u[0] = -50; s.v[0] = 30;
+    expect(s.polarOrderRho()).toBe(p0); expect(s.meanSpeedRho()).toBe(m0);
+    expect(orderStats([0, 1], [0, 0], [5, 0]).phi).toBe(0); // only zero-speed cell has weight → 0, no NaN
+    void t;
+  });
+  it('aligned flow gives Φ_ρ = 1 for any ρ; |u| = 0 cells handled', () => {
+    const s = new Solver(16, defaultParams()); s.u.fill(0.3); s.v.fill(-0.4);
+    s.rho.forEach((_, k) => (s.rho[k] = 0.1 + (k % 7)));
+    s.u[5] = 0; s.v[5] = 0;
+    expect(s.polarOrderRho()).toBeCloseTo(1, 12);
+    const st = new OrderAnalyzer().analyze(16, 16, (i, j) => [s.u[j * 16 + i], s.v[j * 16 + i]], { periodicX: true, periodicY: true, correlation: false, weights: s.rho });
+    expect(st.meanCosW).toBeCloseTo(1, 12); expect(st.phiDirW).toBeCloseTo(1, 12);
   });
 });
 

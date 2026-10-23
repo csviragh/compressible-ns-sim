@@ -62,6 +62,23 @@ Cost is O(N·(R₀/h)²) per step (direct sum, about 300 offsets at the defaults
 
 Same panel as navier-stokes-sim: histogram of P(cos θ_ij) over pairs of cell directions (30 000 sampled pairs), exact ⟨cos θ_ij⟩ = (|Σv̂|² − N)/(N(N−1)), radial correlation C(r) (full and connected) with correlation length ξ (first zero of C_conn), and a 20 s time trace of ⟨cos θ⟩, φ and ξ.
 
+### Density-weighted order parameters
+
+Since the velocity is compressible, cells hold different amounts of fluid. Next to the unweighted
+quantities, the HUD shows density-weighted ones (computed on the CPU from the current fields, so they
+are identical for the CPU and the WebGPU backend, whose fields are read back each frame):
+
+```
+Φ   = |Σ_i û_i| / N'                 Φ_ρ     = |Σ_i ρ_i û_i| / Σ_i ρ_i         (û = u/|u|)
+⟨|u|⟩ = Σ_i |u_i| / N                ⟨|u|⟩_ρ = Σ_i ρ_i |u_i| / Σ_i ρ_i
+```
+
+Cells with |u_i| ≤ 1e-12 have no direction and are left out of both sums of Φ and Φ_ρ (N' = number of
+remaining cells), so for uniform ρ, Φ_ρ = Φ exactly; zero-density cells contribute nothing; a weight sum
+of 0 gives 0. The correlation panel adds the pair-weighted (w_ij = ρ_iρ_j, i ≠ j) mean
+⟨cos θ_ij⟩_ρ = (|Σρv̂|² − Σρ²)/((Σρ)² − Σρ²), φ_dir,ρ, and a ρ-weighted P(cos θ_ij) (green outline over the
+unweighted bars, same sampled pairs). C(r) and ξ stay unweighted.
+
 ### Passive density
 
 A density field ρ (initially 1, reset by the init buttons) is carried by the continuity equation
@@ -137,9 +154,9 @@ so the delay lookups are the same as in the CPU code. GPU arithmetic is f32 (CPU
   generators as navier-stokes-sim.
 * Views: density ρ (diverging map centred at 1, auto or fixed ± range), velocity direction (hue, brightness = speed), speed, vorticity, divergence, dye.
 * **Velocity-arrow overlay** (toggle, spacing and scale sliders).
-* Lamé on/off checkbox; repulsion panel (on/off, A, R₀, r, v_int) with an info line (max retardation R₀/v_int, kernel size, history frames, Lamé sub-steps); correlation panel.
+* Lamé on/off checkbox; repulsion panel (on/off, A, R₀, α, v_int) with an info line (max retardation R₀/v_int, kernel size, history frames, Lamé sub-steps); correlation panel.
 * Sliders: μ (log), λ, self-propulsion on/off, τ, v₀, grid (64/128/256), steps per frame.
-* HUD: grid, t, Δt, kinetic energy, ⟨|u|⟩, polar order |⟨u/|u|⟩|, rms ∇·u, total mass, min/max ρ.
+* HUD: grid, t, Δt, kinetic energy, ⟨|u|⟩ and ⟨|u|⟩_ρ, polar order Φ and Φ_ρ, rms ∇·u, total mass, min/max ρ.
 * URL parameter `?view=density` (or speed, vorticity, divergence, direction, dye) picks the start view.
 * Keys: `Space` pause, `S` step, `R` reset, `V` next view, `A` arrows, `H` hide panel.
 
@@ -153,6 +170,7 @@ so the delay lookups are the same as in the CPU code. GPU arithmetic is f32 (CPU
 * kernel: diverges and decreases monotonically as d → 0; K(R₀) = 0, K′(R₀) = 0; zero for d ≥ R₀ and at d = 0; α clamped to [0.1, 1.95]
 * repulsion: zero force for uniform ρ, outward push around a density bump; retarded signal arrives at distance d after d/v_int (± 2Δt); v_int = ∞ is instantaneous
 * Lamé switch off leaves u untouched by viscosity
+* density-weighted Φ_ρ, ⟨|u|⟩_ρ and ⟨cos θ⟩_ρ: uniform ρ equals unweighted; zero-density cells contribute nothing; aligned flow gives 1
 * correlations: aligned field gives ⟨cos⟩ = 1 and C(r) = 1; ordered + perturbation start gives ⟨cos⟩ ≈ 0.95
 * density: mass conserved to 1e-12 in a compressive flow with ρ ≥ 0; uniform flow translates ρ around the torus (max error < 1 %)
 

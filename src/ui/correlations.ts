@@ -72,7 +72,7 @@ export class CorrelationPanel {
     const doCorr = this.count++ % CORR_EVERY === 0 || !this.last || this.last.r.length !== Math.floor(Math.min(g.nx, g.ny) / 2) + 1;
     const n = s.n, u = s.u, v = s.v, cell: [number, number] = [0, 0];
     const st = this.an.analyze(n, n, (i, j) => { cell[0] = u[j * n + i]; cell[1] = v[j * n + i]; return cell; }, {
-      bins: BINS, pairs: PAIRS, periodicX: true, periodicY: true, correlation: doCorr,
+      bins: BINS, pairs: PAIRS, periodicX: true, periodicY: true, correlation: doCorr, weights: s.rho,
     });
     if (!doCorr && this.last) { st.C = this.last.C; st.Cconn = this.last.Cconn; st.xi0 = this.last.xi0; st.xiE = this.last.xiE; }
     const ms = performance.now() - t0;
@@ -89,6 +89,7 @@ export class CorrelationPanel {
     const f = (x: number, d = 2) => (Number.isFinite(x) ? x.toFixed(d) : '—');
     this.info.textContent =
       `⟨cos θ_ij⟩ = ${f(st.meanCos, 3)} (exact; φ_dir² = ${f(st.phiDir ** 2, 3)}, φ = ${f(this.series.phi.at(-1) ?? NaN, 3)}) · ` +
+      `ρ-weighted: ⟨cos θ_ij⟩_ρ = ${f(st.meanCosW, 3)}, φ_dir,ρ = ${f(st.phiDirW, 3)} · ` +
       `ξ = ${Number.isFinite(st.xi0) ? f(st.xi0 * h, 3) : `> ${f(rMaxDomain, 2)}`} (C_conn = 0), ` +
       `ξ₁/ₑ = ${f(st.xiE * h, 3)} · ${st.n} cells (${st.excluded} slow excluded) · ${this.lastMs.toFixed(1)} ms (C(r)) / ${this.lastHistMs.toFixed(1)} ms`;
     this.drawHist(st);
@@ -108,6 +109,15 @@ export class CorrelationPanel {
       ctx.fillRect(x0, y, Math.max(1, x1 - x0 - 0.5), bot - y);
     }
     const X = (c: number) => 2 + ((c + 1) / 2) * (w - 4);
+    if (st.histW.length) { // ρ-weighted histogram as an outline over the unweighted bars
+      ctx.strokeStyle = '#7ee787'; ctx.lineWidth = 1.5; ctx.beginPath();
+      for (let k = 0; k < B; k++) {
+        const x0 = 2 + (k / B) * (w - 4), x1 = 2 + ((k + 1) / B) * (w - 4), y = bot - (Math.min(st.histW[k], pMax) / pMax) * (bot - top);
+        if (k === 0) ctx.moveTo(x0, y); else ctx.lineTo(x0, y);
+        ctx.lineTo(x1, y);
+      }
+      ctx.stroke(); ctx.lineWidth = 1;
+    }
     ctx.strokeStyle = 'rgba(255,255,255,0.3)';
     ctx.beginPath(); ctx.moveTo(X(0), top); ctx.lineTo(X(0), bot); ctx.stroke();
     if (Number.isFinite(st.meanCos)) {
@@ -117,6 +127,7 @@ export class CorrelationPanel {
     ctx.fillStyle = 'rgba(255,255,255,0.6)';
     ctx.fillText('−1', 2, h - 2); ctx.fillText('0', X(0) - 3, h - 2); ctx.fillText('cos θ_ij  1', w - 62, h - 2);
     ctx.fillStyle = '#3fa9ff'; ctx.fillText(`P(cos θ_ij), max ${pMax.toFixed(1)}`, 4, 10);
+    if (st.histW.length) { ctx.fillStyle = '#7ee787'; ctx.fillText('ρ-weighted', 4, 22); }
     ctx.fillStyle = '#ffa657'; ctx.fillText(`mean ${Number.isFinite(st.meanCos) ? st.meanCos.toFixed(2) : '—'}`, w - 62, 10);
   }
 

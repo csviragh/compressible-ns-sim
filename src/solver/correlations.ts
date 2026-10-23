@@ -28,6 +28,8 @@ export interface OrderOptions {
   periodicY?: boolean;
   correlation?: boolean;    // compute C(r) (default true)
   seed?: number;            // RNG seed for the pair sampling
+  /** Optional per-cell weights (index i + nx·j), e.g. ρ: adds the weighted ⟨cos⟩_w, φ_w and histogram. */
+  weights?: ArrayLike<number>;
 }
 
 export interface OrderStats {
@@ -42,6 +44,10 @@ export interface OrderStats {
   Cconn: Float64Array;      // connected, normalised C(r)
   xi0: number;              // first zero of Cconn (cells), NaN if none within range
   xiE: number;              // first 1/e crossing of Cconn (cells), NaN if none
+  /** Weighted versions (NaN / empty without weights): pair weight w_i w_j, i ≠ j. */
+  meanCosW: number;         // (|Σ w v̂|² − Σ w²) / ((Σ w)² − Σ w²)
+  phiDirW: number;          // |Σ w v̂| / Σ w
+  histW: Float64Array;      // pair-weighted probability density (same sampled pairs)
 }
 
 /** 2D complex FFT workspace of size A × B (row-major, index a + A·b). */
@@ -135,10 +141,18 @@ export class OrderAnalyzer {
     }
     const meanCos = n > 1 ? (sx * sx + sy * sy - n) / (n * (n - 1)) : NaN;
     const phiDir = n > 0 ? Math.hypot(sx, sy) / n : NaN;
+    const W = opt.weights;
+    let meanCosW = NaN, phiDirW = NaN;
+    if (W) {
+      let wx = 0, wy = 0, w1 = 0, w2 = 0;
+      for (let q = 0; q < n; q++) { const k = ids[q], wk = W[k]; wx += wk * ux[k]; wy += wk * uy[k]; w1 += wk; w2 += wk * wk; }
+      if (w1 > 0) phiDirW = Math.hypot(wx, wy) / w1;
+      if (w1 * w1 - w2 > 1e-300) meanCosW = (wx * wx + wy * wy - w2) / (w1 * w1 - w2);
+    }
 
     // histogram from random pairs
-    const hist = new Float64Array(bins);
-    let sampled = 0, sumCos = 0;
+    const hist = new Float64Array(bins), histW = new Float64Array(W ? bins : 0);
+    let sampled = 0, sumCos = 0, sumW = 0;
     if (n > 1) {
       const r = rng(opt.seed ?? (0x2545f491 + 7919 * this.calls++));
       for (let p = 0; p < pairs; p++) {
@@ -146,11 +160,14 @@ export class OrderAnalyzer {
         let b = ids[Math.floor(r() * (n - 1))];
         if (b === a) b = ids[n - 1];
         const c = Math.max(-1, Math.min(1, ux[a] * ux[b] + uy[a] * uy[b]));
-        hist[Math.min(bins - 1, Math.floor(((c + 1) / 2) * bins))]++;
+        const bin = Math.min(bins - 1, Math.floor(((c + 1) / 2) * bins));
+        hist[bin]++;
+        if (W) { const pw = W[a] * W[b]; histW[bin] += pw; sumW += pw; }
         sumCos += c; sampled++;
       }
       const w = bins / (2 * sampled);
       for (let k = 0; k < bins; k++) hist[k] *= w;
+      if (W && sumW > 0) { const ww = bins / (2 * sumW); for (let k = 0; k < bins; k++) histW[k] *= ww; }
     }
 
     const rMax = Math.floor(Math.min(nx, ny) / 2);
@@ -231,6 +248,6 @@ export class OrderAnalyzer {
       xi0 = cross(0); xiE = cross(Math.exp(-1));
     }
     return { n, excluded: N0 - n, meanCos, phiDir, hist, sampledMeanCos: sampled ? sumCos / sampled : NaN,
-      r: rr, C, Cconn: Cc, xi0, xiE };
+      r: rr, C, Cconn: Cc, xi0, xiE, meanCosW, phiDirW, histW };
   }
 }
