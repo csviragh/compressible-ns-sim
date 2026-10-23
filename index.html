@@ -48,6 +48,10 @@
         <label class="slider">Arrow scale <output id="ascale-out"></output>
           <input type="range" id="ascale" min="0.2" max="4" step="0.1" />
         </label>
+        <label class="slider" title="Compute backend: WebGPU compute shaders (auto-detected) or the CPU reference code">Backend
+          <select id="backend"><option value="cpu">CPU (reference)</option><option value="webgpu">WebGPU</option></select>
+        </label>
+        <p class="hint mono" id="backend-info">detecting WebGPU…</p>
         <label class="row">Grid
           <select id="grid">
             <option value="64">64 × 64</option>

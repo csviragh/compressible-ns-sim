@@ -1,6 +1,7 @@
 import './style.css';
 import { Solver, defaultParams, clampParams, bulkViscosity, longitudinalViscosity } from './solver/solver';
 import { CorrelationPanel } from './ui/correlations';
+import { GpuSolver, compareBackends } from './gpu/gpuSolver';
 import { viridis, diverging, hsv, type LUT } from './render/colormaps';
 
 type View = 'density' | 'direction' | 'speed' | 'vorticity' | 'divergence' | 'dye';
@@ -24,6 +25,36 @@ function init(kind = lastInit, seed = lastSeed) {
   lastInit = kind; lastSeed = seed; corrPanel.reset();
   if (kind === 'ordered') solver.seedOrdered(seed);
   else solver.seedRandom(seed, parseFloat($<HTMLInputElement>('seed-amp').value) || 0.05);
+  if (useGpu && gpu) gpu.upload(solver);
+}
+// ---------- backend (CPU / WebGPU) ----------
+let gpu: GpuSolver | null = null, useGpu = false, busy = false, dyeDirty = false, msPerStep = 0, gpuNote = '';
+const qs = new URLSearchParams(location.search);
+function backendInfo() {
+  const el = document.getElementById('backend-info'); if (!el) return;
+  el.textContent = (useGpu ? `WebGPU${gpu?.adapterInfo ? ' (' + gpu.adapterInfo + ')' : ''}` : 'CPU') +
+    ` · ${msPerStep.toFixed(2)} ms/step` + (gpu?.clampedNs ? ` · density sub-steps clamped (wanted ${gpu.clampedNs})` : '') + (gpuNote ? ` · ${gpuNote}` : '');
+}
+function setBackend(b: 'cpu' | 'webgpu') {
+  useGpu = b === 'webgpu' && !!gpu;
+  ($<HTMLSelectElement>('backend')).value = useGpu ? 'webgpu' : 'cpu';
+  if (useGpu) gpu!.upload(solver);
+  else solver.history.clear(); // the CPU ρ history restarts (GPU history is not copied back)
+  msPerStep = 0; backendInfo();
+}
+async function initGpu() {
+  try { gpu = await GpuSolver.create(); } catch (e) { gpu = null; gpuNote = 'WebGPU init failed: ' + (e as Error).message; }
+  const opt = $<HTMLSelectElement>('backend').querySelector('option[value=webgpu]') as HTMLOptionElement;
+  if (!gpu) { opt.disabled = true; opt.textContent = 'WebGPU (unavailable)'; if (!gpuNote) gpuNote = 'navigator.gpu not available, using CPU'; setBackend('cpu'); return; }
+  setBackend(qs.get('backend') === 'cpu' ? 'cpu' : 'webgpu');
+  if (qs.get('gpucheck')) {
+    while (busy) await new Promise((r) => setTimeout(r, 10));
+    busy = true;
+    const r = await compareBackends(gpu, solver, Number(qs.get('gpucheck')) || 10);
+    gpuNote = `check ${r.steps} steps: rel max|Δ| u ${r.u.toExponential(1)} v ${r.v.toExponential(1)} ρ ${r.rho.toExponential(1)} dye ${r.dye.toExponential(1)} · CPU ${r.cpuMsPerStep.toFixed(1)} / GPU ${r.gpuMsPerStep.toFixed(1)} ms/step`;
+    busy = false;
+    console.log('gpucheck', JSON.stringify(r)); (window as unknown as { gpucheck: unknown }).gpucheck = r; backendInfo();
+  }
 }
 function build(n: number) {
   solver = new Solver(n, params); buf = new Float64Array(n * n);
@@ -107,11 +138,24 @@ function applyForces() {
   for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
     let dx = (i + 0.5) * h - drag.x, dy = (j + 0.5) * h - drag.y; dx -= Math.round(dx); dy -= Math.round(dy);
     const g = Math.exp(-(dx * dx + dy * dy) / (2 * s * s)); if (g < 1e-3) continue;
-    const q = j * n + i; solver.fx[q] += fx * g; solver.fy[q] += fy * g; solver.dye[q] = Math.max(solver.dye[q], g);
+    const q = j * n + i; dyeDirty = true; solver.fx[q] += fx * g; solver.fy[q] += fy * g; solver.dye[q] = Math.max(solver.dye[q], g);
   }
   drag.dx = 0; drag.dy = 0;
 }
-function advance(steps: number) { applyForces(); solver.step(); solver.fx.fill(0); solver.fy.fill(0); for (let i = 1; i < steps; i++) solver.step(); }
+function advance(steps: number) {
+  if (useGpu && gpu) {
+    if (busy) return;
+    applyForces(); busy = true;
+    const t0 = performance.now(), dd = dyeDirty; dyeDirty = false;
+    gpu.advance(solver, steps, dd).then(() => { msPerStep = 0.9 * (msPerStep || (performance.now() - t0) / steps) + 0.1 * (performance.now() - t0) / steps; })
+      .catch((e) => { gpuNote = 'GPU error, fell back to CPU: ' + (e as Error).message; console.error(e); setBackend('cpu'); })
+      .finally(() => { busy = false; });
+    return;
+  }
+  const t0 = performance.now();
+  applyForces(); solver.step(); solver.fx.fill(0); solver.fy.fill(0); for (let i = 1; i < steps; i++) solver.step();
+  msPerStep = 0.9 * (msPerStep || (performance.now() - t0) / steps) + 0.1 * (performance.now() - t0) / steps;
+}
 
 function render() {
   const { n } = solver; solver.field(view, buf);
@@ -170,9 +214,12 @@ function frame(now: number) {
   const dt = (now - last) / 1000; last = now; fpsAvg = 0.9 * fpsAvg + 0.1 / Math.max(dt, 1e-3);
   if (running) advance(spf);
   render(); corrPanel.update(solver, (s) => s.polarOrder()); if (running && (solver.t * 60 | 0) % 30 === 0) refresh();
-  $('fps').textContent = `${fpsAvg.toFixed(0)} fps`;
+  $('fps').textContent = `${fpsAvg.toFixed(0)} fps`; if ((solver.t * 60 | 0) % 15 === 0) backendInfo();
   requestAnimationFrame(frame);
 }
 build(256);
+$<HTMLSelectElement>('backend').addEventListener('change', (e) => setBackend((e.target as HTMLSelectElement).value as 'cpu' | 'webgpu'));
+backendInfo();
+void initGpu();
 requestAnimationFrame(frame);
-(window as unknown as { app: unknown }).app = { get solver() { return solver; }, params, corr: corrPanel };
+(window as unknown as { app: unknown }).app = { get solver() { return solver; }, get gpu() { return gpu; }, get backend() { return useGpu ? 'webgpu' : 'cpu'; }, setBackend, compare: (steps = 10) => gpu ? compareBackends(gpu, solver, steps) : null, params, corr: corrPanel };

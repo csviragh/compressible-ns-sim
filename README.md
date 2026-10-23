@@ -107,6 +107,26 @@ Operator splitting per step (Δt = 1/60 s):
 There is no pressure solve, so compression waves are not sound waves: a compressive mode only
 decays at (λ+2μ)k² and is carried/steepened by advection.
 
+## WebGPU backend
+
+`src/gpu/` ports the whole step to WGSL compute shaders (`shaders.wgsl`, host code `gpuSolver.ts`):
+forces + retarded repulsion (`repulse`), the Lamé sub-steps with the on/off switch (`lame`), the
+density CFL reduction (`umax`, atomic max), the MUSCL/SSP-RK2 continuity sub-steps (`dens1–3`, written
+as a gather instead of the CPU's flux scatter) and semi-Lagrangian advection fused with self-propulsion
+and dye fade (`advect`). The ρ history for the retarded repulsion lives in a GPU ring buffer; its
+bookkeeping (frame times, interval, pruning, interpolation weights) reuses `FieldHistory` on the CPU,
+so the delay lookups are the same as in the CPU code. GPU arithmetic is f32 (CPU f64).
+
+* `navigator.gpu` is auto-detected; without it (or on any GPU error) the CPU code is used.
+  The **Backend** selector switches at any time (switching restarts the ρ history); `?backend=cpu` forces CPU.
+* After each frame u, v, ρ, dye are read back into the CPU arrays, so rendering, arrows, HUD and
+  correlations are unchanged (rendering itself is still on the CPU).
+* Density sub-steps per step are capped on the GPU at min(64, 2·n_est + 2) from the previous frame's
+  max |u|; if the GPU needs more, the info line warns.
+* Dev check: `?gpucheck=10` compares 10 steps GPU vs CPU from the same state and prints the relative max
+  differences; `npm run gpucheck` does it headlessly for several parameter sets (needs Chrome).
+  With SwiftShader, 40 steps on 256² agree to ~1e-5 relative (≤1e-3 with the Lamé term off).
+
 ## Controls
 
 * **Drag**: push the fluid and inject dye.
