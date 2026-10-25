@@ -97,7 +97,7 @@ function refresh() {
     }
   }
 }
-bindSlider('repA', () => params.repA, (v) => (params.repA = Math.round(v * 1000) / 1000), Math.log10, (v) => 10 ** v); // log scale 0.001 … 500
+bindSlider('repA', () => params.repA, (v) => (params.repA = +v.toPrecision(4)), Math.log10, (v) => 10 ** v); // log scale 0.0005 … 500
 bindSlider('R0', () => params.R0, (v) => (params.R0 = v));
 bindSlider('alpha', () => params.alpha, (v) => (params.alpha = v));
 const VMAX = 2; // log10 slider max → ∞
