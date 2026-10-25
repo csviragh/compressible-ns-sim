@@ -158,3 +158,8 @@ label.row select { max-width: 175px; }
 .panel-details > summary::before { content: '▸ '; color: var(--muted); font-size: 11px; }
 .panel-details[open] > summary::before { content: '▾ '; }
 .panel-details[open] > summary { margin-bottom: 6px; }
+
+/* sphere page */
+#globe { position: fixed; inset: 0; }
+#globe canvas { touch-action: none; }
+#order-info { white-space: pre-line; }

@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="Compressible active fluid on a rotating sphere (Coriolis force), 3D globe view." />
+    <title>Active fluid on a rotating sphere</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8C%8D%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <div id="globe" aria-label="3D globe. Drag to orbit, scroll to zoom."></div>
+    <div id="hud"><span id="fps">-- fps</span><span id="stats"></span></div>
+    <button id="panel-toggle" class="icon-btn" title="Toggle controls (H)">☰</button>
+    <aside id="panel">
+      <header>
+        <h1>Active fluid on a rotating sphere</h1>
+        <p class="hint">Unit sphere (R = 1), rotating about ẑ (yellow axis). Drag to orbit. <a href="./index.html">← 2D page</a></p>
+      </header>
+      <section class="buttons">
+        <button id="play" title="Space">⏸ Pause</button>
+        <button id="step" title="S">⏭ Step</button>
+        <button id="reset" title="R">⟲ Reset</button>
+      </section>
+      <section class="random-init">
+        <button id="random-init" class="wide">🎲 Random initial conditions</button>
+        <button id="zonal-init" class="wide" title="Solid-body eastward rotation u = v0 ẑ×x, uniform ρ">➡ Zonal (solid-body) flow</button>
+        <label class="row">seed <input id="seed-input" type="text" inputmode="numeric" placeholder="random" size="10"></label>
+        <label class="row" title="0 = smooth random swirls; 1 = fully random directions; also density noise ±amp">amplitude <input id="seed-amp" type="number" value="0.5" min="0" max="1" step="0.05" style="width:5em"></label>
+        <p class="hint">last seed: <span id="seed-used">–</span></p>
+      </section>
+      <section>
+        <label class="row">View
+          <select id="view">
+            <option value="density">Density ρ (log scale)</option>
+            <option value="speed">Speed |u|</option>
+            <option value="direction">Direction (hue, east = red)</option>
+          </select>
+        </label>
+        <label class="row" title="Half-width of the log10 colour range around ρ = 1, in decades; 0 = auto">log₁₀ρ range ±<input id="rho-range" type="number" value="0" min="0" step="0.05" style="width:5em"></label>
+        <label class="check"><input type="checkbox" id="arrows" checked /> Velocity arrows (A)</label>
+        <label class="slider">Arrow scale <output id="ascale-out"></output><input type="range" id="ascale" min="0.05" max="1" step="0.01" /></label>
+        <label class="check" title="Off: co-rotating frame (the solver's frame). On: show the globe spinning at Ω about ẑ, as seen from an inertial frame."><input type="checkbox" id="spin" /> Show frame rotation (inertial view)</label>
+        <label class="row">Grid
+          <select id="grid">
+            <option value="16">6 × 16² (1 536 cells)</option>
+            <option value="24">6 × 24² (3 456)</option>
+            <option value="32" selected>6 × 32² (6 144)</option>
+            <option value="48">6 × 48² (13 824)</option>
+            <option value="64">6 × 64² (24 576)</option>
+          </select>
+        </label>
+        <label class="slider">Steps per frame <output id="spf-out"></output><input type="range" id="spf" min="1" max="8" step="1" /></label>
+      </section>
+      <section>
+        <h2>Rotation (Coriolis)</h2>
+        <p class="hint mono">a = −2Ω (ẑ·n) n × u, f = 2Ω cos(colatitude)</p>
+        <label class="slider">Ω (rad/s, sign = sense) <output id="omega-out"></output><input type="range" id="omega" min="-5" max="5" step="0.05" /></label>
+      </section>
+      <section>
+        <h2>Lamé viscosity</h2>
+        <p class="hint mono">μ(Δ_B u + K u) + (λ+μ)∇(∇·u), K = 1</p>
+        <label class="check"><input type="checkbox" id="lame-on" checked /> Enable Lamé viscous term</label>
+        <label class="slider">Shear viscosity μ <output id="mu-out"></output><input type="range" id="mu" min="-5" max="-1.5" step="0.05" /></label>
+        <label class="slider">Lamé coefficient λ <output id="lambda-out"></output><input type="range" id="lambda" min="-0.01" max="0.03" step="0.0005" /></label>
+      </section>
+      <section>
+        <h2>Self-propulsion</h2>
+        <label class="check"><input type="checkbox" id="selfprop" checked /> Enable −(1/τ)(|u| − v₀)·u/|u|</label>
+        <label class="slider">Relaxation time τ (s) <output id="tau-out"></output><input type="range" id="tau" min="0.05" max="5" step="0.05" /></label>
+        <label class="slider">Target speed v₀ (R/s) <output id="v0-out"></output><input type="range" id="v0" min="0" max="2" step="0.01" /></label>
+      </section>
+      <section>
+        <h2>Pairwise repulsion (retarded)</h2>
+        <p class="hint mono">f = A Σ<sub>y</sub> [ρ(y, t − d/v<sub>int</sub>) − ρ(x,t)] K(d) ê<sub>y→x</sub> dA<sub>y</sub>, d = great-circle distance</p>
+        <label class="check"><input type="checkbox" id="rep-on" checked /> Enable repulsion</label>
+        <label class="slider">Strength A <output id="repA-out"></output><input type="range" id="repA" min="0" max="500" step="1" /></label>
+        <label class="slider">Range R<sub>0</sub> (rad = units of R) <output id="R0-out"></output><input type="range" id="R0" min="0.05" max="0.6" step="0.01" /></label>
+        <label class="slider">Exponent α <output id="alpha-out"></output><input type="range" id="alpha" min="0.1" max="1.95" step="0.05" /></label>
+        <label class="slider" title="log10 v_int; rightmost = ∞ (instantaneous)">Interaction speed v<sub>int</sub> <output id="vInt-out"></output><input type="range" id="vInt" min="-2" max="2" step="0.05" /></label>
+        <p class="hint mono" id="rep-info"></p>
+        <p class="hint">K(d) = [(R<sub>0</sub>/d)<sup>α</sup> − 1](1 − d/R<sub>0</sub>)², own cell excluded. The −ρ(x,t) term removes the
+          (grid-induced) response to a uniform density, which is zero in the continuum, so uniform ρ gives exactly zero force on the
+          non-uniform cubed-sphere grid. Only the repulsion is retarded. 2D Coulomb mode is not available on the sphere yet.
+          Without repulsion there is no pressure, so self-propulsion collapses the mass into near-singular sheets within seconds
+          and those sheets lock onto grid lines (panel edges); keep A ≳ 50 for a resolved, grid-independent flow.</p>
+      </section>
+      <section>
+        <h2>Order parameters</h2>
+        <p class="hint mono" id="order-info"></p>
+        <p class="hint">Global polar order ⟨û⟩ is undefined on a sphere (each cell has its own tangent plane; hairy-ball theorem). Shown instead:
+          <b>⟨cos⟩</b> = mean alignment of edge-neighbour pairs with u<sub>j</sub> parallel-transported to x<sub>i</sub>, and <b>⟨cos⟩<sub>ρ</sub></b>
+          the same weighted by pair mass; <b>L<sub>z</sub></b> = Σm(x×u)·ẑ / Σm|u|sinθ (+1 = all eastward, −1 = all westward);
+          <b>Φ<sub>L</sub></b> = |Σ m x×û| / Σm (1 = all mass on parallel great circles about one axis).</p>
+      </section>
+      <details>
+        <summary>About the model</summary>
+        <p>Equiangular cubed-sphere finite-volume grid. Velocity stored as 3D Cartesian vectors, projected to the tangent plane after each sub-step.
+          Semi-Lagrangian advection along great circles with parallel transport; conservative upwind density fluxes; Coriolis applied as an
+          exact rotation of u about the local normal (does no work). Centrifugal force is absorbed into the geopotential (not modelled). Time in s, lengths in R.</p>
+        <p>Shortcuts: <kbd>Space</kbd> pause, <kbd>S</kbd> step, <kbd>R</kbd> reset, <kbd>V</kbd> next view, <kbd>A</kbd> arrows, <kbd>H</kbd> hide panel.</p>
+      </details>
+    </aside>
+    <script type="module" src="/src/sphere/main.ts"></script>
+  </body>
+</html>

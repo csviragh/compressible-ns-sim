@@ -211,3 +211,35 @@ npm run build
 ```
 
 CI runs tests and the build on every push; pushes to `main` deploy to GitHub Pages (root only).
+
+## Rotating sphere (`sphere.html`)
+
+A second page runs the same compressible active fluid on a **rotating unit sphere** with a three.js 3D globe
+(orbit controls, rotation axis in yellow, optional "inertial view" that spins the globe at Ω).
+Units: sphere radius R = 1 (so distances are great-circle angles in radians), time in seconds, Ω in rad/s.
+
+* **Grid:** equiangular cubed sphere, 6 × n² cells (default n = 32 → 6 144 cells; 16…64 selectable).
+  Exact spherical cell areas (Σ = 4π), 4 edge neighbours per cell including across panel edges, exact edge lengths
+  and face normals, so density fluxes are antisymmetric and **mass is conserved to round-off**.
+* **Velocity:** stored as 3D Cartesian components, projected onto the tangent plane after every sub-step.
+* **Equations:** ∂u/∂t + ∇_u u = μ(Δ_B u + K u) + (λ+μ)∇(∇·u) − (1/τ)(|u|−v₀)û − 2Ω(ẑ·n) n×u + f_rep,
+  ∂ρ/∂t + ∇·(ρu) = 0. The Lamé term uses P Δ(u_cart) = Δ_B u − u (component Laplacian, then projection) plus the Ricci
+  term (K = 1), i.e. μ(PΔu_cart + 2u) + (λ+μ)∇(∇·u); solid-body rotation is stress-free. Least-squares gradients
+  and a non-orthogonally corrected FV Laplacian keep the operators consistent across the panel-edge kinks.
+* **Advection:** semi-Lagrangian along great circles (departure point by exact rotation), bilinear interpolation in
+  equiangular coordinates inside a panel and a linear least-squares fit through the true cell positions where the
+  stencil crosses a panel edge, with parallel transport of the vectors. Density: conservative upwind FV with
+  linear face reconstruction and CFL sub-steps.
+* **Coriolis:** applied as an exact rotation of u about the local normal by −2Ω cos(colatitude)·Δt, so it does no work.
+  Centrifugal force is assumed absorbed into the geopotential.
+* **Repulsion:** K(d) = [(R₀/d)^α − 1](1 − d/R₀)² with d the **great-circle** distance (the physical distance on the
+  surface; chord would differ by < 0.1 % at R₀ = 0.15) and direction = tangent at x pointing away from y.
+  f(x) = A Σ_y [ρ(y, t − d/v_int) − ρ(x, t)] K(d) ê dA_y — the −ρ(x,t) term cancels the grid-induced response to
+  uniform density (zero in the continuum), so uniform ρ gives exactly zero force. History: ring buffer of past ρ,
+  linear interpolation between steps. Default ON with A = 100 (areas are in R² units, so A must be larger than on
+  the unit-square page): without it there is no pressure and the mass collapses into grid-pinned sheets.
+  2D Coulomb is not implemented on the sphere.
+* **Order parameters** (polar order ⟨û⟩ is undefined on a sphere): ⟨cos⟩ = mean alignment of neighbouring cells
+  with parallel transport, ⟨cos⟩_ρ the mass-weighted version, L_z = Σm(x×u)·ẑ / Σm|u|sinθ (zonal order, +1 = all
+  eastward), Φ_L = |Σm x×û|/Σm (common rotation axis), plus ⟨|u|⟩, ⟨|u|⟩_ρ, ρ_max.
+* CPU only for now (no WebGPU path on the sphere).
