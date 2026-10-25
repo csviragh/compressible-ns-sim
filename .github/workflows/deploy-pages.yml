@@ -1,10 +1,13 @@
-# Builds the app and deploys it to GitHub Pages on every push to main
-# (and on manual runs). Live at https://csviragh.github.io/compressible-ns-sim/
+# Builds the app and deploys it to GitHub Pages.
+#   root      https://csviragh.github.io/compressible-ns-sim/          ← always built from main
+#   preview   https://csviragh.github.io/compressible-ns-sim/preview/  ← built from PREVIEW_BRANCH, if it exists
+# Runs on pushes to main or the preview branch (and manually). A Pages site is a single artifact,
+# so every run rebuilds both; pushing the preview branch therefore never changes the root build.
 name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, sphere]
   workflow_dispatch:
 
 permissions:
@@ -16,11 +19,16 @@ concurrency:
   group: pages
   cancel-in-progress: true
 
+env:
+  PREVIEW_BRANCH: sphere
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: main
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -28,6 +36,16 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      - name: Build preview branch into dist/preview
+        run: |
+          if git ls-remote --exit-code --heads origin "$PREVIEW_BRANCH" >/dev/null; then
+            git fetch --depth 1 origin "$PREVIEW_BRANCH"
+            git worktree add /tmp/preview FETCH_HEAD
+            cd /tmp/preview && npm ci && npm test && npm run build
+            mkdir -p "$GITHUB_WORKSPACE/dist/preview" && cp -r dist/. "$GITHUB_WORKSPACE/dist/preview/"
+          else
+            echo "no $PREVIEW_BRANCH branch, root only"
+          fi
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
